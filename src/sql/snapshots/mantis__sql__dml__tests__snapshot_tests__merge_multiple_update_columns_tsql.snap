@@ -1,0 +1,5 @@
+---
+source: src/sql/dml.rs
+expression: sql
+---
+MERGE INTO [products] AS [tgt] USING [product_updates] AS [src] ON [tgt].[sku] = [src].[sku] WHEN MATCHED THEN UPDATE SET [name] = [src].[name], [price] = [src].[price], [stock] = [src].[stock];

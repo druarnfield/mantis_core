@@ -1,0 +1,9 @@
+---
+source: src/sql/ddl.rs
+assertion_line: 1684
+expression: sql
+---
+CREATE VIEW IF NOT EXISTS "active_users" AS SELECT
+  "id",
+  "name"
+FROM "users"

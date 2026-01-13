@@ -1,0 +1,6 @@
+---
+source: src/sql/ddl.rs
+assertion_line: 1731
+expression: sql
+---
+DROP VIEW "active_users"

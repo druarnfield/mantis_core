@@ -1,0 +1,66 @@
+[package]
+name = "mantis"
+version = "0.1.0"
+edition = "2021"
+description = "A universal semantic layer that compiles to multi-dialect SQL"
+license = "MIT"
+
+[lib]
+name = "mantis"
+path = "src/lib.rs"
+
+[[bin]]
+name = "mantis"
+path = "src/bin/main.rs"
+
+[dependencies]
+mlua = { version = "0.10", features = ["lua54", "vendored"] }
+petgraph = "0.6"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
+sqlparser = "0.53"
+thiserror = "2.0"
+toml = "0.9.8"
+regex = "1"
+
+# Async runtime for worker communication
+tokio = { version = "1", features = ["process", "io-util", "io-std", "sync", "time", "rt-multi-thread", "macros", "net"] }
+async-trait = "0.1"
+futures = "0.3"
+uuid = { version = "1", features = ["v4"] }
+
+# Metadata cache
+rusqlite = { version = "0.32", features = ["bundled"] }
+dirs = "5"
+
+# String inflection (pluralization, case conversion)
+Inflector = "0.11"
+
+# CLI and secure credential storage
+clap = { version = "4", features = ["derive"] }
+ring = "0.17"
+base64 = "0.22"
+rand = "0.9"
+
+# Web server (optional, for UI)
+axum = { version = "0.8.7", optional = true }
+rust-embed = { version = "8", optional = true }
+mime_guess = { version = "2", optional = true }
+tower-http = { version = "0.6.8", features = ["cors"], optional = true }
+open = { version = "5", optional = true }
+ryu = "1.0.22"
+
+# Language Server Protocol
+tower-lsp = "0.20"
+tree-sitter = "0.25"
+tree-sitter-lua = "0.2"
+tokio-tungstenite = "0.28"
+dashmap = "6.1"
+
+[features]
+default = []
+ui = ["axum", "rust-embed", "mime_guess", "tower-http", "open"]
+embedded-worker = []  # Embed Go worker binary in the Rust binary
+
+[dev-dependencies]
+insta = "1.41"

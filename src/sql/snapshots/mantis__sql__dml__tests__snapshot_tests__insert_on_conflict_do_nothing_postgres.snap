@@ -1,0 +1,6 @@
+---
+source: src/sql/dml.rs
+assertion_line: 1279
+expression: sql
+---
+INSERT INTO "users" ("id", "name") VALUES (1, 'Alice') ON CONFLICT DO NOTHING

@@ -1,0 +1,6 @@
+---
+source: src/sql/dml.rs
+assertion_line: 1307
+expression: sql
+---
+INSERT INTO "users" ("name", "email") VALUES ('Alice', 'alice@example.com') RETURNING "id"
