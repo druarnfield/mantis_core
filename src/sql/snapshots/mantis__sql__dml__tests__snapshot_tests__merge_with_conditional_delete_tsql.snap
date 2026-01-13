@@ -1,0 +1,5 @@
+---
+source: src/sql/dml.rs
+expression: sql
+---
+MERGE INTO [target] AS [t] USING [source] AS [s] ON [t].[id] = [s].[id] WHEN MATCHED AND [s].[deleted] = 1 THEN DELETE WHEN MATCHED THEN UPDATE SET [name] = [s].[name];

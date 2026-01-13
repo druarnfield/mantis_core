@@ -1,0 +1,9 @@
+---
+source: src/sql/ddl.rs
+assertion_line: 1640
+expression: sql
+---
+CREATE VIEW "active_users" AS SELECT
+  "id",
+  "name"
+FROM "users"

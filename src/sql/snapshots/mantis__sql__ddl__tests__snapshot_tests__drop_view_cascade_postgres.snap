@@ -1,0 +1,6 @@
+---
+source: src/sql/ddl.rs
+assertion_line: 1757
+expression: sql
+---
+DROP VIEW IF EXISTS "active_users" CASCADE

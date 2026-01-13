@@ -1,0 +1,6 @@
+---
+source: src/sql/dml.rs
+assertion_line: 1321
+expression: sql
+---
+UPDATE "users" SET "status" = 'active' WHERE "id" = 1
