@@ -20,6 +20,11 @@ serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
 sqlparser = "0.53"
 thiserror = "2.0"
+
+# DSL Parser
+chumsky = "1.0.0-alpha.7"
+ariadne = "0.5"
+
 toml = "0.9.8"
 regex = "1"
 
