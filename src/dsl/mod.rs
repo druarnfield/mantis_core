@@ -53,6 +53,7 @@
 
 pub mod ast;
 pub mod lexer;
+pub mod parser;
 pub mod span;
 
 pub use ast::*;
@@ -181,16 +182,57 @@ impl std::error::Error for Diagnostic {}
 ///     println!("Parsing succeeded!");
 /// }
 /// ```
-pub fn parse(_source: &str) -> ParseResult {
-    // TODO: Implement parser using chumsky in Task 3
-    ParseResult {
-        model: None,
-        diagnostics: vec![Diagnostic {
-            span: 0..0,
-            severity: Severity::Error,
-            message: "Parser not yet implemented".to_string(),
-        }],
-    }
+pub fn parse(source: &str) -> ParseResult {
+    use chumsky::error::Rich;
+    use chumsky::input::Input;
+    use chumsky::span::SimpleSpan;
+    use chumsky::span::Span as _;
+    use chumsky::Parser as _;
+
+    // Step 1: Lexical analysis
+    let (tokens, lex_errs) = lexer::lexer().parse(source).into_output_errors();
+
+    // Collect lexer errors as diagnostics
+    let mut diagnostics: Vec<Diagnostic> = lex_errs
+        .into_iter()
+        .map(|e: Rich<'_, char>| {
+            let span = e.span();
+            Diagnostic::error(span.start()..span.end(), e.to_string())
+        })
+        .collect();
+
+    // If lexing failed completely, return early
+    let tokens: Vec<(lexer::Token<'_>, SimpleSpan)> = match tokens {
+        Some(t) => t,
+        None => {
+            return ParseResult {
+                model: None,
+                diagnostics,
+            };
+        }
+    };
+
+    // Step 2: Parsing
+    let len = source.len();
+    let eoi: SimpleSpan = (len..len).into();
+    let token_stream = tokens.as_slice().map(
+        eoi,
+        |(tok, span): &(lexer::Token<'_>, SimpleSpan)| (tok, span),
+    );
+
+    let (model, parse_errs) = parser::parser().parse(token_stream).into_output_errors();
+
+    // Collect parser errors as diagnostics
+    diagnostics.extend(
+        parse_errs
+            .into_iter()
+            .map(|e: Rich<'_, lexer::Token<'_>, SimpleSpan>| {
+                let span = e.span();
+                Diagnostic::error(span.start()..span.end(), e.to_string())
+            }),
+    );
+
+    ParseResult { model, diagnostics }
 }
 
 /// Parse a DSL source file.
@@ -222,14 +264,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_parse_returns_not_implemented() {
-        let result = parse("anything");
-        assert!(result.model.is_none());
-        assert!(!result.diagnostics.is_empty());
-        assert_eq!(result.diagnostics[0].severity, Severity::Error);
-        assert!(result.diagnostics[0]
-            .message
-            .contains("not yet implemented"));
+    fn test_parse_simple_table() {
+        let result = parse(r#"
+            table sales {
+                source "sales.csv";
+                atoms { amount decimal; }
+            }
+        "#);
+        assert!(result.model.is_some());
+        assert!(result.diagnostics.is_empty());
+        let model = result.model.unwrap();
+        assert_eq!(model.items.len(), 1);
+    }
+
+    #[test]
+    fn test_parse_error_on_invalid_input() {
+        let result = parse("invalid { syntax");
+        // Should have parse errors
+        assert!(result.has_errors() || result.model.is_none());
     }
 
     #[test]
