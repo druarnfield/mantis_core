@@ -170,11 +170,60 @@ where
             }
         });
 
+    // Calculated slicer: name type = { sql_expr };
+    // Parse any token that's not RBrace, then reconstruct the SQL string from tokens
+    let sql_token = any()
+        .filter(|t: &Token| !matches!(t, Token::RBrace))
+        .map_with(|t: Token, e| (t.to_string(), to_span(e.span())));
+
+    let slicer_calculated = ident.clone()
+        .map_with(|n, e| Spanned::new(n, to_span(e.span())))
+        .then(
+            data_type
+                .map_with(|t, e| Spanned::new(t, to_span(e.span())))
+        )
+        .then_ignore(just(Token::Eq))
+        .then(
+            just(Token::LBrace)
+                .map_with(|_, e| to_span(e.span()))
+                .then(
+                    sql_token
+                        .repeated()
+                        .collect::<Vec<_>>()
+                )
+                .then(
+                    just(Token::RBrace)
+                        .map_with(|_, e| to_span(e.span()))
+                )
+                .map(|((lbrace_span, tokens), rbrace_span)| {
+                    // Reconstruct SQL from tokens
+                    let sql = tokens.iter()
+                        .map(|(s, _)| s.as_str())
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    // Span covers from LBrace start to RBrace end
+                    let span = lbrace_span.start..rbrace_span.end;
+                    SqlExpr::new(sql, span)
+                })
+        )
+        .then_ignore(just(Token::Semicolon))
+        .map_with(|((name, data_type_spanned), expr), e| {
+            let kind = SlicerKind::Calculated {
+                data_type: data_type_spanned.value,
+                expr,
+            };
+            Slicer {
+                name,
+                kind: Spanned::new(kind, to_span(e.span())),
+            }
+        });
+
     // Order matters: try FK and Via first (they have distinguishing tokens),
-    // then fall back to inline
+    // then calculated (has = { }), then fall back to inline
     let slicer = choice((
         slicer_fk,
         slicer_via,
+        slicer_calculated,
         slicer_inline,
     ));
 
@@ -578,6 +627,35 @@ mod tests {
                 assert_eq!(table.times[4].value.grain.value, GrainLevel::Year);
             }
             _ => panic!("Expected Table"),
+        }
+    }
+
+    #[test]
+    fn test_parse_calculated_slicer() {
+        let input = r#"
+            table orders {
+                source "dbo.orders";
+                slicers {
+                    region_code string = { UPPER(SUBSTRING(region, 1, 2)) };
+                }
+            }
+        "#;
+        let model = parse_str(input);
+
+        assert_eq!(model.items.len(), 1);
+        match &model.items[0].value {
+            Item::Table(table) => {
+                assert_eq!(table.slicers.len(), 1);
+                match &table.slicers[0].value.kind.value {
+                    SlicerKind::Calculated { data_type, expr } => {
+                        assert_eq!(table.slicers[0].value.name.value, "region_code");
+                        assert_eq!(*data_type, DataType::String);
+                        assert!(expr.sql.contains("UPPER"));
+                    }
+                    _ => panic!("Expected Calculated slicer"),
+                }
+            }
+            _ => panic!("Expected Table item"),
         }
     }
 }
