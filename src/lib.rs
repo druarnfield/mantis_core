@@ -44,6 +44,7 @@
 pub mod cache;
 pub mod config;
 pub mod crypto;
+pub mod dsl;
 pub mod lsp;
 pub mod metadata;
 pub mod model;
