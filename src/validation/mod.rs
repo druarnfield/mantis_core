@@ -170,8 +170,51 @@ fn validate_circular_dependencies(model: &Model, errors: &mut Vec<ValidationErro
     }
 }
 
-fn validate_drill_paths(_model: &Model, _errors: &mut Vec<ValidationError>) {
-    // Placeholder - will implement in next task
+fn validate_drill_paths(model: &Model, errors: &mut Vec<ValidationError>) {
+    // Validate dimension drill paths reference existing attributes
+    for (dim_name, dimension) in &model.dimensions {
+        for (drill_path_name, drill_path) in &dimension.drill_paths {
+            for level in &drill_path.levels {
+                if !dimension.attributes.contains_key(level) {
+                    errors.push(ValidationError::InvalidDrillPath {
+                        entity_type: "Dimension".to_string(),
+                        entity_name: dim_name.clone(),
+                        drill_path_name: drill_path_name.clone(),
+                        issue: format!("Attribute '{}' does not exist", level),
+                    });
+                }
+            }
+        }
+    }
+
+    // Validate calendar drill paths reference valid grain levels
+    for (cal_name, calendar) in &model.calendars {
+        let grain_mappings = match &calendar.body {
+            crate::model::CalendarBody::Physical(phys) => &phys.grain_mappings,
+            crate::model::CalendarBody::Generated { grain, .. } => {
+                // Generated calendars auto-support their grain
+                continue;
+            }
+        };
+
+        let drill_paths = match &calendar.body {
+            crate::model::CalendarBody::Physical(phys) => &phys.drill_paths,
+            _ => continue,
+        };
+
+        for (drill_path_name, drill_path) in drill_paths {
+            for level in &drill_path.levels {
+                if !grain_mappings.contains_key(level) {
+                    errors.push(ValidationError::InvalidDrillPath {
+                        entity_type: "Calendar".to_string(),
+                        entity_name: cal_name.clone(),
+                        drill_path_name: drill_path_name.clone(),
+                        issue: format!("Grain level {:?} is not mapped", level),
+                    });
+                }
+            }
+        }
+    }
 }
 
 /// Extract measure references from SQL expression.

@@ -255,3 +255,127 @@ fn test_no_circular_dependency_linear_chain() {
     let result = validation::validate(&model);
     assert!(result.is_ok());
 }
+
+#[test]
+fn test_detect_invalid_dimension_drill_path() {
+    use mantis_core::model::{Attribute, DataType, Dimension, DimensionDrillPath};
+
+    let mut attributes = HashMap::new();
+    attributes.insert(
+        "city".to_string(),
+        Attribute {
+            name: "city".to_string(),
+            data_type: DataType::String,
+        },
+    );
+    attributes.insert(
+        "state".to_string(),
+        Attribute {
+            name: "state".to_string(),
+            data_type: DataType::String,
+        },
+    );
+
+    let mut drill_paths = HashMap::new();
+    drill_paths.insert(
+        "geographic".to_string(),
+        DimensionDrillPath {
+            name: "geographic".to_string(),
+            levels: vec![
+                "city".to_string(),
+                "state".to_string(),
+                "nonexistent_attribute".to_string(), // Undefined!
+            ],
+        },
+    );
+
+    let dimension = Dimension {
+        name: "geography".to_string(),
+        source: "dbo.dim_geo".to_string(),
+        key: "geo_id".to_string(),
+        attributes,
+        drill_paths,
+    };
+
+    let mut model = model::Model {
+        defaults: None,
+        calendars: HashMap::new(),
+        dimensions: HashMap::new(),
+        tables: HashMap::new(),
+        measures: HashMap::new(),
+        reports: HashMap::new(),
+    };
+
+    model.dimensions.insert("geography".to_string(), dimension);
+
+    let result = validation::validate(&model);
+    assert!(result.is_err());
+
+    let errors = result.unwrap_err();
+    assert!(errors
+        .iter()
+        .any(|e| matches!(e, validation::ValidationError::InvalidDrillPath { .. })));
+}
+
+#[test]
+fn test_valid_dimension_drill_path() {
+    use mantis_core::model::{Attribute, DataType, Dimension, DimensionDrillPath};
+
+    let mut attributes = HashMap::new();
+    attributes.insert(
+        "city".to_string(),
+        Attribute {
+            name: "city".to_string(),
+            data_type: DataType::String,
+        },
+    );
+    attributes.insert(
+        "state".to_string(),
+        Attribute {
+            name: "state".to_string(),
+            data_type: DataType::String,
+        },
+    );
+    attributes.insert(
+        "country".to_string(),
+        Attribute {
+            name: "country".to_string(),
+            data_type: DataType::String,
+        },
+    );
+
+    let mut drill_paths = HashMap::new();
+    drill_paths.insert(
+        "geographic".to_string(),
+        DimensionDrillPath {
+            name: "geographic".to_string(),
+            levels: vec![
+                "city".to_string(),
+                "state".to_string(),
+                "country".to_string(), // All valid!
+            ],
+        },
+    );
+
+    let dimension = Dimension {
+        name: "geography".to_string(),
+        source: "dbo.dim_geo".to_string(),
+        key: "geo_id".to_string(),
+        attributes,
+        drill_paths,
+    };
+
+    let mut model = model::Model {
+        defaults: None,
+        calendars: HashMap::new(),
+        dimensions: HashMap::new(),
+        tables: HashMap::new(),
+        measures: HashMap::new(),
+        reports: HashMap::new(),
+    };
+
+    model.dimensions.insert("geography".to_string(), dimension);
+
+    let result = validation::validate(&model);
+    assert!(result.is_ok());
+}
