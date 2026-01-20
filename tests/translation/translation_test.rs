@@ -69,6 +69,61 @@ fn test_translate_empty_from_returns_error() {
 }
 
 #[test]
+fn test_compile_sql_expression_with_atoms() {
+    use mantis::dsl::span::Span;
+    use mantis::model::{Atom, AtomType, SqlExpr, Table};
+
+    let mut atoms = HashMap::new();
+    atoms.insert(
+        "revenue".to_string(),
+        Atom {
+            name: "revenue".to_string(),
+            data_type: AtomType::Decimal,
+        },
+    );
+    atoms.insert(
+        "quantity".to_string(),
+        Atom {
+            name: "quantity".to_string(),
+            data_type: AtomType::Integer,
+        },
+    );
+
+    let mut tables = HashMap::new();
+    tables.insert(
+        "fact_sales".to_string(),
+        Table {
+            name: "fact_sales".to_string(),
+            source: "dbo.fact_sales".to_string(),
+            atoms,
+            times: HashMap::new(),
+            slicers: HashMap::new(),
+        },
+    );
+
+    let model = Model {
+        defaults: None,
+        calendars: HashMap::new(),
+        dimensions: HashMap::new(),
+        tables,
+        measures: HashMap::new(),
+        reports: HashMap::new(),
+    };
+
+    let expr = SqlExpr {
+        sql: "@revenue * @quantity".to_string(),
+        span: Span::default(),
+    };
+
+    let result = translation::compile_sql_expr(&expr, "fact_sales", &model);
+    assert!(result.is_ok());
+    assert_eq!(
+        result.unwrap(),
+        "dbo.fact_sales.revenue * dbo.fact_sales.quantity"
+    );
+}
+
+#[test]
 fn test_translate_inline_slicer() {
     use mantis::model::{DataType, GroupItem, Slicer, Table};
 

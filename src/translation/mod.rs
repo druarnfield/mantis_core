@@ -4,6 +4,9 @@ use crate::model::{Model, Report};
 use crate::semantic::planner::types::{
     DerivedExpr, DerivedField, SelectField, SemanticQuery, TimeFunction,
 };
+use regex::Regex;
+use sqlparser::dialect::GenericDialect;
+use sqlparser::parser::Parser;
 
 /// Translation error.
 #[derive(Debug, Clone)]
@@ -512,4 +515,70 @@ pub fn translate_report(report: &Report, model: &Model) -> Result<SemanticQuery,
     // TODO: Translate filters, sort, limit
 
     Ok(query)
+}
+
+/// Compile a SQL expression by replacing @atom references with qualified table.column.
+///
+/// Strategy:
+/// 1. Use regex to replace @atom → qualified column (simple, reliable)
+/// 2. Validate the result with sqlparser to ensure it's valid SQL
+///
+/// Note: sqlparser parses @atoms as valid SQL (SQL Server variable syntax), but
+/// for our purposes, simple text replacement is clearer and more maintainable.
+/// A future enhancement could use AST transformation if needed for complex cases.
+///
+/// Example: "@revenue * @quantity" → "dbo.fact_sales.revenue * dbo.fact_sales.quantity"
+pub fn compile_sql_expr(
+    expr: &crate::model::table::SqlExpr,
+    from_table: &str,
+    model: &Model,
+) -> Result<String, TranslationError> {
+    // Get the table
+    let table =
+        model
+            .tables
+            .get(from_table)
+            .ok_or_else(|| TranslationError::UndefinedReference {
+                entity_type: "table".to_string(),
+                name: from_table.to_string(),
+            })?;
+
+    // Pattern to match @atom references (word characters after @)
+    let atom_pattern = Regex::new(r"@(\w+)").unwrap();
+
+    let mut result = expr.sql.clone();
+    let mut atoms_found = Vec::new();
+
+    // First pass: collect all @atoms and verify they exist
+    for cap in atom_pattern.captures_iter(&expr.sql) {
+        let atom_name = cap[1].to_string();
+
+        // Verify atom exists in the table
+        if !table.atoms.contains_key(&atom_name) {
+            return Err(TranslationError::SqlCompilationError {
+                expression: expr.sql.clone(),
+                error: format!("Undefined atom: @{}", atom_name),
+            });
+        }
+
+        atoms_found.push(atom_name);
+    }
+
+    // Second pass: replace each @atom with qualified table.column
+    for atom_name in atoms_found {
+        let qualified = format!("{}.{}", table.source, atom_name);
+        result = result.replace(&format!("@{}", atom_name), &qualified);
+    }
+
+    // Validate the compiled SQL using sqlparser
+    // This ensures the result is syntactically valid SQL
+    let dialect = GenericDialect {};
+    let test_sql = format!("SELECT {}", result);
+
+    Parser::parse_sql(&dialect, &test_sql).map_err(|e| TranslationError::SqlCompilationError {
+        expression: expr.sql.clone(),
+        error: format!("Invalid SQL after @atom compilation: {}", e),
+    })?;
+
+    Ok(result)
 }
