@@ -1,6 +1,7 @@
 //! DSL-first semantic model types.
 
 pub mod calendar;
+pub mod defaults;
 pub mod dimension;
 pub mod measure;
 pub mod report;
@@ -8,6 +9,7 @@ pub mod table;
 pub mod types;
 
 pub use calendar::{Calendar, CalendarBody, DrillPath, PhysicalCalendar};
+pub use defaults::Defaults;
 pub use dimension::{Attribute, Dimension, DimensionDrillPath};
 pub use measure::{Measure, MeasureBlock};
 pub use report::{GroupItem, PeriodExpr, Report, ShowItem, SortDirection, SortItem, TimeSuffix};
@@ -20,7 +22,7 @@ use std::collections::HashMap;
 #[derive(Debug, Clone)]
 pub struct Model {
     /// Model-wide defaults
-    pub defaults: Option<Defaults>,
+    pub defaults: Option<defaults::Defaults>,
 
     /// Calendars (physical and generated)
     pub calendars: HashMap<String, calendar::Calendar>,
@@ -37,7 +39,3 @@ pub struct Model {
     /// Reports
     pub reports: HashMap<String, report::Report>,
 }
-
-// Placeholder types - will implement in later tasks
-#[derive(Debug, Clone)]
-pub struct Defaults;
