@@ -110,6 +110,13 @@ where
         Token::Sunday => Weekday::Sunday,
     }.labelled("weekday");
 
+    // Parse NULL handling mode
+    let null_handling = select! {
+        Token::CoalesceZero => NullHandling::CoalesceZero,
+        Token::NullOnZero => NullHandling::NullOnZero,
+        Token::ErrorOnZero => NullHandling::ErrorOnZero,
+    }.labelled("null handling mode");
+
     // Parse a date literal from a Number token (YYYY-MM-DD format)
     // The lexer produces numbers like "2024" or "2024.01" but dates are YYYY-MM-DD
     // We need to parse sequences: Number("-")Number("-")Number
@@ -127,6 +134,74 @@ where
         Ok(DateLiteral::new(year, month, day))
     })
     .labelled("date literal (YYYY-MM-DD)");
+
+    // ==========================================================================
+    // Defaults block
+    // ==========================================================================
+
+    // Parse a default setting
+    let default_setting_calendar = just(Token::Calendar)
+        .ignore_then(
+            ident.clone()
+                .map_with(|n, e| Spanned::new(n, to_span(e.span())))
+        )
+        .then_ignore(just(Token::Semicolon))
+        .map(DefaultSetting::Calendar);
+
+    let default_setting_fiscal_year_start = just(Token::FiscalYearStart)
+        .ignore_then(
+            month.clone()
+                .map_with(|m, e| Spanned::new(m, to_span(e.span())))
+        )
+        .then_ignore(just(Token::Semicolon))
+        .map(DefaultSetting::FiscalYearStart);
+
+    let default_setting_week_start = just(Token::WeekStart)
+        .ignore_then(
+            weekday.clone()
+                .map_with(|w, e| Spanned::new(w, to_span(e.span())))
+        )
+        .then_ignore(just(Token::Semicolon))
+        .map(DefaultSetting::WeekStart);
+
+    let default_setting_null_handling = just(Token::NullHandling)
+        .ignore_then(
+            null_handling.clone()
+                .map_with(|nh, e| Spanned::new(nh, to_span(e.span())))
+        )
+        .then_ignore(just(Token::Semicolon))
+        .map(DefaultSetting::NullHandling);
+
+    let default_setting_decimal_places = just(Token::DecimalPlaces)
+        .ignore_then(
+            select! { Token::Number(s) => s }
+                .try_map(|s, span| {
+                    s.parse::<u8>().map_err(|_| Rich::custom(span, "invalid decimal places"))
+                })
+                .map_with(|n, e| Spanned::new(n, to_span(e.span())))
+        )
+        .then_ignore(just(Token::Semicolon))
+        .map(DefaultSetting::DecimalPlaces);
+
+    let default_setting = choice((
+        default_setting_calendar,
+        default_setting_fiscal_year_start,
+        default_setting_week_start,
+        default_setting_null_handling,
+        default_setting_decimal_places,
+    ));
+
+    // defaults { ... }
+    let defaults = just(Token::Defaults)
+        .ignore_then(
+            default_setting
+                .map_with(|s, e| Spanned::new(s, to_span(e.span())))
+                .repeated()
+                .collect::<Vec<_>>()
+                .delimited_by(just(Token::LBrace), just(Token::RBrace))
+        )
+        .map(|settings| Defaults { settings })
+        .map_with(|d, e| Spanned::new(d, to_span(e.span())));
 
     // ==========================================================================
     // Atoms block: atoms { name type; ... }
@@ -772,25 +847,103 @@ where
         });
 
     // ==========================================================================
+    // Measures block
+    // ==========================================================================
+
+    // SQL expression parser (reuse from slicers)
+    let sql_expr = just(Token::LBrace)
+        .map_with(|_, e| to_span(e.span()))
+        .then(
+            sql_token.clone()
+                .repeated()
+                .collect::<Vec<_>>()
+        )
+        .then(
+            just(Token::RBrace)
+                .map_with(|_, e| to_span(e.span()))
+        )
+        .map(|((lbrace_span, tokens), rbrace_span)| {
+            // Reconstruct SQL from tokens
+            let sql = tokens.iter()
+                .map(|(s, _)| s.as_str())
+                .collect::<Vec<_>>()
+                .join(" ");
+            // Span covers from LBrace start to RBrace end
+            let span = lbrace_span.start..rbrace_span.end;
+            SqlExpr::new(sql, span)
+        });
+
+    // Measure: name = { expr } [where { cond }] [null mode];
+    let measure = ident.clone()
+        .map_with(|n, e| Spanned::new(n, to_span(e.span())))
+        .then_ignore(just(Token::Eq))
+        .then(
+            sql_expr.clone()
+                .map_with(|expr, e| Spanned::new(expr, to_span(e.span())))
+        )
+        .then(
+            just(Token::Where)
+                .ignore_then(
+                    sql_expr.clone()
+                        .map_with(|expr, e| Spanned::new(expr, to_span(e.span())))
+                )
+                .or_not()
+        )
+        .then(
+            just(Token::Null)
+                .ignore_then(
+                    null_handling.clone()
+                        .map_with(|nh, e| Spanned::new(nh, to_span(e.span())))
+                )
+                .or_not()
+        )
+        .then_ignore(just(Token::Semicolon))
+        .map(|(((name, expr), filter), null_handling)| Measure {
+            name,
+            expr,
+            filter,
+            null_handling,
+        });
+
+    // measures table_name { measure; ... }
+    let measures_block = just(Token::Measures)
+        .ignore_then(
+            ident.clone()
+                .map_with(|n, e| Spanned::new(n, to_span(e.span())))
+        )
+        .then(
+            measure
+                .map_with(|m, e| Spanned::new(m, to_span(e.span())))
+                .repeated()
+                .collect::<Vec<_>>()
+                .delimited_by(just(Token::LBrace), just(Token::RBrace))
+        )
+        .map(|(table, measures)| MeasureBlock { table, measures });
+
+    // ==========================================================================
     // Top-level items
     // ==========================================================================
 
-    // Parse any top-level item: calendar, dimension, or table
+    // Parse any top-level item: calendar, dimension, table, or measures block
     let item = choice((
         calendar.map(Item::Calendar),
         dimension.map(Item::Dimension),
         table.map(Item::Table),
+        measures_block.map(Item::MeasureBlock),
     ));
 
-    // The model is a list of items
-    item
-        .map_with(|i, e| Spanned::new(i, to_span(e.span())))
-        .repeated()
-        .collect::<Vec<_>>()
-        .map(|items| Model {
-            defaults: None,
-            items,
-        })
+    // The model is an optional defaults block followed by items
+    // Parse optional defaults first (must come before all items)
+    let model = defaults.or_not()
+        .then(
+            item
+                .map_with(|i, e| Spanned::new(i, to_span(e.span())))
+                .repeated()
+                .collect::<Vec<_>>()
+        )
+        .map(|(defaults, items)| Model { defaults, items });
+
+    model
 }
 
 #[cfg(test)]
@@ -1609,6 +1762,229 @@ mod tests {
                     _ => panic!("Expected Physical calendar"),
                 },
                 _ => panic!("Expected Calendar item"),
+            }
+        }
+    }
+
+    // ==========================================================================
+    // Defaults parsing tests
+    // ==========================================================================
+
+    #[test]
+    fn test_parse_defaults() {
+        let input = r#"
+            defaults {
+                calendar dates;
+                fiscal_year_start July;
+                week_start Monday;
+                null_handling coalesce_zero;
+                decimal_places 2;
+            }
+        "#;
+        let model = parse_str(input);
+
+        // Should have defaults
+        assert!(model.defaults.is_some());
+        let defaults = &model.defaults.unwrap().value;
+        assert_eq!(defaults.settings.len(), 5);
+
+        // Check calendar setting
+        match &defaults.settings[0].value {
+            DefaultSetting::Calendar(name) => {
+                assert_eq!(name.value, "dates");
+            }
+            _ => panic!("Expected Calendar setting"),
+        }
+
+        // Check fiscal_year_start
+        match &defaults.settings[1].value {
+            DefaultSetting::FiscalYearStart(month) => {
+                assert_eq!(month.value, Month::July);
+            }
+            _ => panic!("Expected FiscalYearStart setting"),
+        }
+
+        // Check week_start
+        match &defaults.settings[2].value {
+            DefaultSetting::WeekStart(weekday) => {
+                assert_eq!(weekday.value, Weekday::Monday);
+            }
+            _ => panic!("Expected WeekStart setting"),
+        }
+
+        // Check null_handling
+        match &defaults.settings[3].value {
+            DefaultSetting::NullHandling(nh) => {
+                assert_eq!(nh.value, NullHandling::CoalesceZero);
+            }
+            _ => panic!("Expected NullHandling setting"),
+        }
+
+        // Check decimal_places
+        match &defaults.settings[4].value {
+            DefaultSetting::DecimalPlaces(dp) => {
+                assert_eq!(dp.value, 2);
+            }
+            _ => panic!("Expected DecimalPlaces setting"),
+        }
+    }
+
+    #[test]
+    fn test_parse_defaults_minimal() {
+        let input = r#"
+            defaults {
+                calendar dates;
+            }
+        "#;
+        let model = parse_str(input);
+
+        assert!(model.defaults.is_some());
+        let defaults = &model.defaults.unwrap().value;
+        assert_eq!(defaults.settings.len(), 1);
+    }
+
+    #[test]
+    fn test_parse_defaults_and_items() {
+        let input = r#"
+            defaults {
+                calendar dates;
+            }
+
+            table sales {
+                source "sales.csv";
+            }
+        "#;
+        let model = parse_str(input);
+
+        // Should have both defaults and items
+        assert!(model.defaults.is_some());
+        assert_eq!(model.items.len(), 1);
+
+        match &model.items[0].value {
+            Item::Table(t) => assert_eq!(t.name.value, "sales"),
+            _ => panic!("Expected Table"),
+        }
+    }
+
+    // ==========================================================================
+    // Measures parsing tests
+    // ==========================================================================
+
+    #[test]
+    fn test_parse_measures() {
+        let input = r#"
+            measures fact_sales {
+                revenue = { sum(@revenue) };
+                margin = { revenue - cost };
+                enterprise_rev = { sum(@revenue) } where { segment = "Enterprise" };
+            }
+        "#;
+        let model = parse_str(input);
+
+        assert_eq!(model.items.len(), 1);
+        match &model.items[0].value {
+            Item::MeasureBlock(mb) => {
+                assert_eq!(mb.table.value, "fact_sales");
+                assert_eq!(mb.measures.len(), 3);
+
+                // Check first measure
+                let m1 = &mb.measures[0].value;
+                assert_eq!(m1.name.value, "revenue");
+                assert!(m1.expr.value.sql.contains("sum"));
+                assert!(m1.filter.is_none());
+                assert!(m1.null_handling.is_none());
+
+                // Check second measure
+                let m2 = &mb.measures[1].value;
+                assert_eq!(m2.name.value, "margin");
+                assert!(m2.expr.value.sql.contains("revenue"));
+                assert!(m2.expr.value.sql.contains("cost"));
+                assert!(m2.filter.is_none());
+                assert!(m2.null_handling.is_none());
+
+                // Check third measure with WHERE clause
+                let m3 = &mb.measures[2].value;
+                assert_eq!(m3.name.value, "enterprise_rev");
+                assert!(m3.expr.value.sql.contains("sum"));
+                assert!(m3.filter.is_some());
+                let filter = &m3.filter.as_ref().unwrap().value;
+                assert!(filter.sql.contains("segment"));
+                assert!(m3.null_handling.is_none());
+            }
+            _ => panic!("Expected MeasureBlock"),
+        }
+    }
+
+    #[test]
+    fn test_parse_measure_with_null_handling() {
+        let input = r#"
+            measures sales {
+                safe_ratio = { numerator / denominator } null coalesce_zero;
+            }
+        "#;
+        let model = parse_str(input);
+
+        assert_eq!(model.items.len(), 1);
+        match &model.items[0].value {
+            Item::MeasureBlock(mb) => {
+                assert_eq!(mb.measures.len(), 1);
+                let m = &mb.measures[0].value;
+                assert_eq!(m.name.value, "safe_ratio");
+                assert!(m.null_handling.is_some());
+                assert_eq!(m.null_handling.as_ref().unwrap().value, NullHandling::CoalesceZero);
+            }
+            _ => panic!("Expected MeasureBlock"),
+        }
+    }
+
+    #[test]
+    fn test_parse_measure_with_where_and_null() {
+        let input = r#"
+            measures sales {
+                safe_enterprise = { sum(@revenue) } where { segment = "Enterprise" } null null_on_zero;
+            }
+        "#;
+        let model = parse_str(input);
+
+        assert_eq!(model.items.len(), 1);
+        match &model.items[0].value {
+            Item::MeasureBlock(mb) => {
+                assert_eq!(mb.measures.len(), 1);
+                let m = &mb.measures[0].value;
+                assert_eq!(m.name.value, "safe_enterprise");
+                assert!(m.filter.is_some());
+                assert!(m.null_handling.is_some());
+                assert_eq!(m.null_handling.as_ref().unwrap().value, NullHandling::NullOnZero);
+            }
+            _ => panic!("Expected MeasureBlock"),
+        }
+    }
+
+    #[test]
+    fn test_parse_defaults_with_all_null_handling_modes() {
+        // Test all null handling modes
+        for (mode_str, expected) in [
+            ("coalesce_zero", NullHandling::CoalesceZero),
+            ("null_on_zero", NullHandling::NullOnZero),
+            ("error_on_zero", NullHandling::ErrorOnZero),
+        ] {
+            let input = format!(
+                r#"
+                defaults {{
+                    null_handling {};
+                }}
+            "#,
+                mode_str
+            );
+            let model = parse_str(&input);
+
+            assert!(model.defaults.is_some());
+            let defaults = &model.defaults.unwrap().value;
+            match &defaults.settings[0].value {
+                DefaultSetting::NullHandling(nh) => {
+                    assert_eq!(nh.value, expected);
+                }
+                _ => panic!("Expected NullHandling setting"),
             }
         }
     }
