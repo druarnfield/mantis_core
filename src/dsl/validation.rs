@@ -10,8 +10,8 @@
 use std::collections::HashMap;
 
 use super::ast::*;
-use super::span::{Span, Spanned};
-use super::{Diagnostic, Severity};
+use super::span::Span;
+use super::Diagnostic;
 
 /// Validate a parsed model for semantic correctness.
 ///
@@ -111,7 +111,10 @@ impl Validator {
         if let Some(prev_span) = self.calendars.insert(name.clone(), span.clone()) {
             self.error(
                 span,
-                format!("Duplicate calendar definition '{}' (first defined at {:?})", name, prev_span),
+                format!(
+                    "Duplicate calendar definition '{}' (first defined at {:?})",
+                    name, prev_span
+                ),
             );
         }
     }
@@ -123,7 +126,10 @@ impl Validator {
         if let Some(prev_span) = self.dimensions.insert(name.clone(), span.clone()) {
             self.error(
                 span,
-                format!("Duplicate dimension definition '{}' (first defined at {:?})", name, prev_span),
+                format!(
+                    "Duplicate dimension definition '{}' (first defined at {:?})",
+                    name, prev_span
+                ),
             );
         }
     }
@@ -135,7 +141,10 @@ impl Validator {
         if let Some(prev_span) = self.tables.insert(name.clone(), span.clone()) {
             self.error(
                 span,
-                format!("Duplicate table definition '{}' (first defined at {:?})", name, prev_span),
+                format!(
+                    "Duplicate table definition '{}' (first defined at {:?})",
+                    name, prev_span
+                ),
             );
         }
 
@@ -145,7 +154,8 @@ impl Validator {
             let slicer_name = slicer.value.name.value.clone();
             let slicer_span = slicer.value.name.span.clone();
 
-            if let Some(prev_span) = table_slicers.insert(slicer_name.clone(), slicer_span.clone()) {
+            if let Some(prev_span) = table_slicers.insert(slicer_name.clone(), slicer_span.clone())
+            {
                 self.error(
                     slicer_span,
                     format!(
@@ -163,13 +173,18 @@ impl Validator {
 
         // Collect duplicates first to avoid borrowing issues
         let mut duplicates = Vec::new();
-        let table_measures = self.measures.entry(table_name.clone()).or_insert_with(HashMap::new);
+        let table_measures = self
+            .measures
+            .entry(table_name.clone())
+            .or_insert_with(HashMap::new);
 
         for measure in &block.measures {
             let measure_name = measure.value.name.value.clone();
             let measure_span = measure.value.name.span.clone();
 
-            if let Some(prev_span) = table_measures.insert(measure_name.clone(), measure_span.clone()) {
+            if let Some(prev_span) =
+                table_measures.insert(measure_name.clone(), measure_span.clone())
+            {
                 duplicates.push((measure_name, measure_span, prev_span));
             }
         }
@@ -234,7 +249,8 @@ impl Validator {
                             // We need to find the actual slicer to check its kind
                             for candidate in &table.slicers {
                                 if candidate.value.name.value == *fk_slicer {
-                                    if matches!(candidate.value.kind.value, SlicerKind::Via { .. }) {
+                                    if matches!(candidate.value.kind.value, SlicerKind::Via { .. })
+                                    {
                                         self.error(
                                             slicer.value.kind.span.clone(),
                                             format!(
@@ -278,7 +294,10 @@ impl Validator {
             if !self.tables.contains_key(table_name) {
                 self.error(
                     table_span,
-                    format!("Report references undefined table '{}' in FROM clause", table_name),
+                    format!(
+                        "Report references undefined table '{}' in FROM clause",
+                        table_name
+                    ),
                 );
             }
         }
@@ -305,7 +324,12 @@ impl Validator {
                             format!(
                                 "Measure '{}' not found in any of the FROM tables ({})",
                                 name,
-                                report.from.iter().map(|t| t.value.as_str()).collect::<Vec<_>>().join(", ")
+                                report
+                                    .from
+                                    .iter()
+                                    .map(|t| t.value.as_str())
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
                             ),
                         );
                     }
@@ -321,6 +345,7 @@ impl Validator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::{Severity, span::Spanned};
 
     #[test]
     fn test_validate_undefined_calendar() {
@@ -500,8 +525,12 @@ mod tests {
         let diagnostics = validate(&model);
         // Should have two errors: "some_fk" doesn't exist, and via can't reference via
         assert_eq!(diagnostics.len(), 2);
-        let has_undefined = diagnostics.iter().any(|d| d.message.contains("Undefined slicer") && d.message.contains("some_fk"));
-        let has_via_error = diagnostics.iter().any(|d| d.message.contains("cannot reference another via slicer"));
+        let has_undefined = diagnostics
+            .iter()
+            .any(|d| d.message.contains("Undefined slicer") && d.message.contains("some_fk"));
+        let has_via_error = diagnostics
+            .iter()
+            .any(|d| d.message.contains("cannot reference another via slicer"));
         assert!(has_undefined);
         assert!(has_via_error);
     }
@@ -593,7 +622,9 @@ mod tests {
 
         let diagnostics = validate(&model);
         assert_eq!(diagnostics.len(), 1);
-        assert!(diagnostics[0].message.contains("Measure 'revenue' not found"));
+        assert!(diagnostics[0]
+            .message
+            .contains("Measure 'revenue' not found"));
         assert_eq!(diagnostics[0].severity, Severity::Warning);
     }
 
@@ -719,7 +750,12 @@ mod tests {
         };
 
         let diagnostics = validate(&model);
-        assert_eq!(diagnostics.len(), 0, "Expected no diagnostics for valid model, but got: {:?}", diagnostics);
+        assert_eq!(
+            diagnostics.len(),
+            0,
+            "Expected no diagnostics for valid model, but got: {:?}",
+            diagnostics
+        );
     }
 
     #[test]
