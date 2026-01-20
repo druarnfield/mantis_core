@@ -1,12 +1,16 @@
 //! DSL-first semantic model types.
 
 pub mod calendar;
+pub mod dimension;
 pub mod measure;
+pub mod report;
 pub mod table;
 pub mod types;
 
 pub use calendar::{Calendar, CalendarBody, DrillPath, PhysicalCalendar};
+pub use dimension::{Attribute, Dimension};
 pub use measure::{Measure, MeasureBlock};
+pub use report::{GroupItem, PeriodExpr, Report, ShowItem, SortDirection, SortItem, TimeSuffix};
 pub use table::{Atom, Slicer, SqlExpr, Table, TimeBinding};
 pub use types::{AtomType, DataType, GrainLevel, Month, NullHandling, Weekday};
 
@@ -22,7 +26,7 @@ pub struct Model {
     pub calendars: HashMap<String, calendar::Calendar>,
 
     /// Dimensions (optional rich dimensions with drill paths)
-    pub dimensions: HashMap<String, Dimension>,
+    pub dimensions: HashMap<String, dimension::Dimension>,
 
     /// Tables (universal: sources, facts, wide tables, CSVs)
     pub tables: HashMap<String, table::Table>,
@@ -31,15 +35,9 @@ pub struct Model {
     pub measures: HashMap<String, measure::MeasureBlock>,
 
     /// Reports
-    pub reports: HashMap<String, Report>,
+    pub reports: HashMap<String, report::Report>,
 }
 
 // Placeholder types - will implement in later tasks
 #[derive(Debug, Clone)]
 pub struct Defaults;
-
-#[derive(Debug, Clone)]
-pub struct Dimension;
-
-#[derive(Debug, Clone)]
-pub struct Report;

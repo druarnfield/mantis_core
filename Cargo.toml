@@ -75,5 +75,21 @@ name = "types_test"
 path = "tests/model/types_test.rs"
 
 [[test]]
+name = "table_test"
+path = "tests/model/table_test.rs"
+
+[[test]]
+name = "calendar_test"
+path = "tests/model/calendar_test.rs"
+
+[[test]]
 name = "measure_test"
 path = "tests/model/measure_test.rs"
+
+[[test]]
+name = "dimension_test"
+path = "tests/model/dimension_test.rs"
+
+[[test]]
+name = "report_test"
+path = "tests/model/report_test.rs"
