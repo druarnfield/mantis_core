@@ -69,3 +69,7 @@ embedded-worker = []  # Embed Go worker binary in the Rust binary
 
 [dev-dependencies]
 insta = "1.41"
+
+[[test]]
+name = "types_test"
+path = "tests/model/types_test.rs"
