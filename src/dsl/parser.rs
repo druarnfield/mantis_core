@@ -44,6 +44,17 @@ where
         Token::Include => "include".to_string(),
         Token::Range => "range".to_string(),
         Token::Infer => "infer".to_string(),
+        // Grain levels (for drill path levels)
+        Token::Minute => "minute".to_string(),
+        Token::Hour => "hour".to_string(),
+        Token::Day => "day".to_string(),
+        Token::Week => "week".to_string(),
+        Token::Month => "month".to_string(),
+        Token::Quarter => "quarter".to_string(),
+        Token::Year => "year".to_string(),
+        Token::FiscalMonth => "fiscal_month".to_string(),
+        Token::FiscalQuarter => "fiscal_quarter".to_string(),
+        Token::FiscalYear => "fiscal_year".to_string(),
     }.labelled("identifier or keyword");
 
     // Parse a string literal
@@ -906,15 +917,383 @@ where
         .map(|(table, measures)| MeasureBlock { table, measures });
 
     // ==========================================================================
+    // Report definition
+    // ==========================================================================
+
+    // Parse a relative period keyword
+    let relative_period = select! {
+        Token::Today => RelativePeriod::Today,
+        Token::Yesterday => RelativePeriod::Yesterday,
+        Token::ThisWeek => RelativePeriod::ThisWeek,
+        Token::ThisMonth => RelativePeriod::ThisMonth,
+        Token::ThisQuarter => RelativePeriod::ThisQuarter,
+        Token::ThisYear => RelativePeriod::ThisYear,
+        Token::LastWeek => RelativePeriod::LastWeek,
+        Token::LastMonth => RelativePeriod::LastMonth,
+        Token::LastQuarter => RelativePeriod::LastQuarter,
+        Token::LastYear => RelativePeriod::LastYear,
+        Token::Ytd => RelativePeriod::Ytd,
+        Token::Qtd => RelativePeriod::Qtd,
+        Token::Mtd => RelativePeriod::Mtd,
+        Token::ThisFiscalYear => RelativePeriod::ThisFiscalYear,
+        Token::LastFiscalYear => RelativePeriod::LastFiscalYear,
+        Token::ThisFiscalQuarter => RelativePeriod::ThisFiscalQuarter,
+        Token::LastFiscalQuarter => RelativePeriod::LastFiscalQuarter,
+        Token::FiscalYtd => RelativePeriod::FiscalYtd,
+    }.labelled("relative period");
+
+    // Parse trailing period pattern: last_N_<unit>
+    // Pattern is tokenized as Token::Ident, so we need to parse and validate it
+    let trailing_period = ident.clone()
+        .try_map(|s, span| {
+            // Expected format: last_<N>_<unit> (e.g., last_12_months)
+            if !s.starts_with("last_") {
+                return Err(Rich::custom(span, format!("invalid trailing period: expected 'last_N_unit', got '{}'", s)));
+            }
+
+            let parts: Vec<&str> = s.split('_').collect();
+            if parts.len() != 3 {
+                return Err(Rich::custom(span, format!("invalid trailing period format: expected 'last_N_unit', got '{}'", s)));
+            }
+
+            let count = parts[1].parse::<u32>()
+                .map_err(|_| Rich::custom(span, format!("invalid count in trailing period: '{}'", parts[1])))?;
+
+            let unit = PeriodUnit::from_str(parts[2])
+                .ok_or_else(|| Rich::custom(span, format!("invalid unit in trailing period: '{}' (expected days, weeks, months, quarters, or years)", parts[2])))?;
+
+            Ok(RelativePeriod::Trailing { count, unit })
+        })
+        .labelled("trailing period (last_N_unit)");
+
+    // Period expression parser: relative period or trailing period
+    let period_expr = relative_period
+        .or(trailing_period)
+        .map(PeriodExpr::Relative)
+        .labelled("period expression");
+
+    // Parse time suffix
+    let time_suffix = select! {
+        Token::Ytd => TimeSuffix::Ytd,
+        Token::Qtd => TimeSuffix::Qtd,
+        Token::Mtd => TimeSuffix::Mtd,
+        Token::Wtd => TimeSuffix::Wtd,
+        Token::FiscalYtd => TimeSuffix::FiscalYtd,
+        Token::FiscalQtd => TimeSuffix::FiscalQtd,
+        Token::PriorYear => TimeSuffix::PriorYear,
+        Token::PriorQuarter => TimeSuffix::PriorQuarter,
+        Token::PriorMonth => TimeSuffix::PriorMonth,
+        Token::PriorWeek => TimeSuffix::PriorWeek,
+        Token::YoyGrowth => TimeSuffix::YoyGrowth,
+        Token::QoqGrowth => TimeSuffix::QoqGrowth,
+        Token::MomGrowth => TimeSuffix::MomGrowth,
+        Token::WowGrowth => TimeSuffix::WowGrowth,
+        Token::YoyDelta => TimeSuffix::YoyDelta,
+        Token::QoqDelta => TimeSuffix::QoqDelta,
+        Token::MomDelta => TimeSuffix::MomDelta,
+        Token::WowDelta => TimeSuffix::WowDelta,
+        Token::Rolling3m => TimeSuffix::Rolling3m,
+        Token::Rolling6m => TimeSuffix::Rolling6m,
+        Token::Rolling12m => TimeSuffix::Rolling12m,
+        Token::Rolling3mAvg => TimeSuffix::Rolling3mAvg,
+        Token::Rolling6mAvg => TimeSuffix::Rolling6mAvg,
+        Token::Rolling12mAvg => TimeSuffix::Rolling12mAvg,
+    }.labelled("time suffix");
+
+    // Parse drill path reference: source.path.level
+    // Use ident_or_keyword for level to allow grain levels like "month", "quarter", etc.
+    let drill_path_ref = ident.clone()
+        .then_ignore(just(Token::Dot))
+        .then(ident.clone())
+        .then_ignore(just(Token::Dot))
+        .then(ident_or_keyword.clone())
+        .map(|((source, path), level)| DrillPathRef {
+            source,
+            path,
+            level,
+            label: None,
+        });
+
+    // Parse group item: drill_path_ref [as "Label"];
+    let group_item = drill_path_ref
+        .then(
+            just(Token::As)
+                .ignore_then(string_lit.clone())
+                .or_not()
+        )
+        .map(|(mut drill_ref, label)| {
+            drill_ref.label = label;
+            GroupItem::DrillPathRef(drill_ref)
+        })
+        .then_ignore(just(Token::Semicolon))
+        .labelled("group item");
+
+    // Parse group block: group { ... }
+    let group_block = just(Token::Group)
+        .ignore_then(
+            group_item
+                .map_with(|g, e| Spanned::new(g, to_span(e.span())))
+                .repeated()
+                .collect::<Vec<_>>()
+                .delimited_by(just(Token::LBrace), just(Token::RBrace))
+        );
+
+    // Parse inline measure: name = { expr } [as "Label"];
+    let inline_measure = ident.clone()
+        .then_ignore(just(Token::Eq))
+        .then(sql_expr.clone())
+        .then(
+            just(Token::As)
+                .ignore_then(string_lit.clone())
+                .or_not()
+        )
+        .map(|((name, expr), label)| ShowItem::InlineMeasure { name, expr, label });
+
+    // Parse measure with suffix: name.suffix [as "Label"];
+    let measure_with_suffix = ident.clone()
+        .then_ignore(just(Token::Dot))
+        .then(time_suffix)
+        .then(
+            just(Token::As)
+                .ignore_then(string_lit.clone())
+                .or_not()
+        )
+        .map(|((name, suffix), label)| ShowItem::MeasureWithSuffix { name, suffix, label });
+
+    // Parse basic measure: name [as "Label"];
+    let basic_measure = ident.clone()
+        .then(
+            just(Token::As)
+                .ignore_then(string_lit.clone())
+                .or_not()
+        )
+        .map(|(name, label)| ShowItem::Measure { name, label });
+
+    // Parse show item (order matters: try inline first, then suffix, then basic)
+    let show_item = choice((
+        inline_measure,
+        measure_with_suffix,
+        basic_measure,
+    ))
+    .then_ignore(just(Token::Semicolon))
+    .labelled("show item");
+
+    // Parse show block: show { ... }
+    let show_block = just(Token::Show)
+        .ignore_then(
+            show_item
+                .map_with(|s, e| Spanned::new(s, to_span(e.span())))
+                .repeated()
+                .collect::<Vec<_>>()
+                .delimited_by(just(Token::LBrace), just(Token::RBrace))
+        );
+
+    // Parse sort direction
+    let sort_direction = select! {
+        Token::Asc => SortDirection::Asc,
+        Token::Desc => SortDirection::Desc,
+    };
+
+    // Parse sort item: column.direction
+    let sort_item = ident.clone()
+        .then_ignore(just(Token::Dot))
+        .then(sort_direction)
+        .map(|(column, direction)| SortItem { column, direction })
+        .labelled("sort item");
+
+    // Parse sort clause: sort item, item, ...;
+    let sort_clause = just(Token::Sort)
+        .ignore_then(
+            sort_item
+                .map_with(|s, e| Spanned::new(s, to_span(e.span())))
+                .separated_by(just(Token::Comma))
+                .at_least(1)
+                .collect::<Vec<_>>()
+        )
+        .then_ignore(just(Token::Semicolon));
+
+    // Report body parts
+    #[derive(Clone)]
+    enum ReportPart {
+        From(Vec<Spanned<String>>),
+        UseDate(Vec<Spanned<String>>),
+        Period(Spanned<PeriodExpr>),
+        Group(Vec<Spanned<GroupItem>>),
+        Show(Vec<Spanned<ShowItem>>),
+        Filter(Spanned<SqlExpr>),
+        Sort(Vec<Spanned<SortItem>>),
+        Limit(Spanned<u64>),
+    }
+
+    // Parse from clause: from table1, table2, ...;
+    let report_from = just(Token::From)
+        .ignore_then(
+            ident.clone()
+                .map_with(|n, e| Spanned::new(n, to_span(e.span())))
+                .separated_by(just(Token::Comma))
+                .at_least(1)
+                .collect::<Vec<_>>()
+        )
+        .then_ignore(just(Token::Semicolon))
+        .map(ReportPart::From);
+
+    // Parse use_date clause: use_date col1, col2, ...;
+    let report_use_date = just(Token::UseDate)
+        .ignore_then(
+            ident.clone()
+                .map_with(|n, e| Spanned::new(n, to_span(e.span())))
+                .separated_by(just(Token::Comma))
+                .at_least(1)
+                .collect::<Vec<_>>()
+        )
+        .then_ignore(just(Token::Semicolon))
+        .map(ReportPart::UseDate);
+
+    // Parse period clause: period expr;
+    let report_period = just(Token::Period)
+        .ignore_then(
+            period_expr
+                .map_with(|p, e| Spanned::new(p, to_span(e.span())))
+        )
+        .then_ignore(just(Token::Semicolon))
+        .map(ReportPart::Period);
+
+    // Parse filter clause: filter { condition };
+    let report_filter = just(Token::Filter)
+        .ignore_then(
+            sql_expr.clone()
+                .map_with(|expr, e| Spanned::new(expr, to_span(e.span())))
+        )
+        .then_ignore(just(Token::Semicolon))
+        .map(ReportPart::Filter);
+
+    // Parse limit clause: limit N;
+    let report_limit = just(Token::Limit)
+        .ignore_then(
+            select! { Token::Number(s) => s }
+                .try_map(|s, span| {
+                    s.parse::<u64>().map_err(|_| Rich::custom(span, "invalid limit value"))
+                })
+                .map_with(|n, e| Spanned::new(n, to_span(e.span())))
+        )
+        .then_ignore(just(Token::Semicolon))
+        .map(ReportPart::Limit);
+
+    let report_part = choice((
+        report_from,
+        report_use_date,
+        report_period,
+        group_block.map(ReportPart::Group),
+        show_block.map(ReportPart::Show),
+        report_filter,
+        sort_clause.map(ReportPart::Sort),
+        report_limit,
+    ));
+
+    // Parse report body
+    let report_body = report_part
+        .repeated()
+        .at_least(1)
+        .collect::<Vec<_>>()
+        .try_map(|parts, span| {
+            let mut from: Option<Vec<Spanned<String>>> = None;
+            let mut use_date: Option<Vec<Spanned<String>>> = None;
+            let mut period: Option<Spanned<PeriodExpr>> = None;
+            let mut group: Vec<Spanned<GroupItem>> = Vec::new();
+            let mut show: Vec<Spanned<ShowItem>> = Vec::new();
+            let mut filter: Option<Spanned<SqlExpr>> = None;
+            let mut sort: Vec<Spanned<SortItem>> = Vec::new();
+            let mut limit: Option<Spanned<u64>> = None;
+
+            for part in parts {
+                match part {
+                    ReportPart::From(f) => {
+                        if from.is_some() {
+                            return Err(Rich::custom(span, "duplicate from clause"));
+                        }
+                        from = Some(f);
+                    }
+                    ReportPart::UseDate(u) => {
+                        if use_date.is_some() {
+                            return Err(Rich::custom(span, "duplicate use_date clause"));
+                        }
+                        use_date = Some(u);
+                    }
+                    ReportPart::Period(p) => {
+                        if period.is_some() {
+                            return Err(Rich::custom(span, "duplicate period clause"));
+                        }
+                        period = Some(p);
+                    }
+                    ReportPart::Group(g) => {
+                        group.extend(g);
+                    }
+                    ReportPart::Show(s) => {
+                        show.extend(s);
+                    }
+                    ReportPart::Filter(f) => {
+                        if filter.is_some() {
+                            return Err(Rich::custom(span, "duplicate filter clause"));
+                        }
+                        filter = Some(f);
+                    }
+                    ReportPart::Sort(s) => {
+                        sort.extend(s);
+                    }
+                    ReportPart::Limit(l) => {
+                        if limit.is_some() {
+                            return Err(Rich::custom(span, "duplicate limit clause"));
+                        }
+                        limit = Some(l);
+                    }
+                }
+            }
+
+            let from = from.ok_or_else(|| {
+                Rich::custom(span, "report requires from clause")
+            })?;
+            let use_date = use_date.ok_or_else(|| {
+                Rich::custom(span, "report requires use_date clause")
+            })?;
+
+            Ok((from, use_date, period, group, show, filter, sort, limit))
+        });
+
+    // report name { ... }
+    let report = just(Token::Report)
+        .ignore_then(
+            ident.clone()
+                .map_with(|n, e| Spanned::new(n, to_span(e.span())))
+        )
+        .then(
+            report_body
+                .delimited_by(just(Token::LBrace), just(Token::RBrace))
+        )
+        .map(|(name, (from, use_date, period, group, show, filter, sort, limit))| {
+            Report {
+                name,
+                from,
+                use_date,
+                period,
+                group,
+                show,
+                filter,
+                sort,
+                limit,
+            }
+        });
+
+    // ==========================================================================
     // Top-level items
     // ==========================================================================
 
-    // Parse any top-level item: calendar, dimension, table, or measures block
+    // Parse any top-level item: calendar, dimension, table, measures block, or report
     let item = choice((
         calendar.map(Item::Calendar),
         dimension.map(Item::Dimension),
         table.map(Item::Table),
         measures_block.map(Item::MeasureBlock),
+        report.map(Item::Report),
     ));
 
     // The model is an optional defaults block followed by items
@@ -2023,6 +2402,474 @@ mod tests {
                 assert!(m2.expr.value.sql.contains("denominator"));
             }
             _ => panic!("Expected MeasureBlock"),
+        }
+    }
+
+    // ==========================================================================
+    // Report parsing tests
+    // ==========================================================================
+
+    #[test]
+    fn test_parse_report_minimal() {
+        let input = r#"
+            report simple {
+                from sales;
+                use_date order_date;
+            }
+        "#;
+        let model = parse_str(input);
+
+        assert_eq!(model.items.len(), 1);
+        match &model.items[0].value {
+            Item::Report(report) => {
+                assert_eq!(report.name.value, "simple");
+                assert_eq!(report.from.len(), 1);
+                assert_eq!(report.from[0].value, "sales");
+                assert_eq!(report.use_date.len(), 1);
+                assert_eq!(report.use_date[0].value, "order_date");
+                assert!(report.period.is_none());
+                assert!(report.group.is_empty());
+                assert!(report.show.is_empty());
+                assert!(report.filter.is_none());
+                assert!(report.sort.is_empty());
+                assert!(report.limit.is_none());
+            }
+            _ => panic!("Expected Report item"),
+        }
+    }
+
+    #[test]
+    fn test_parse_report_full() {
+        let input = r#"
+            report quarterly_review {
+                from fact_sales;
+                use_date order_date;
+                period last_12_months;
+                group {
+                    dates.standard.month as "Month";
+                }
+                show {
+                    revenue as "Revenue";
+                    revenue.yoy_growth as "YoY Growth";
+                }
+                sort revenue.desc;
+                limit 20;
+            }
+        "#;
+        let model = parse_str(input);
+
+        assert_eq!(model.items.len(), 1);
+        match &model.items[0].value {
+            Item::Report(report) => {
+                assert_eq!(report.name.value, "quarterly_review");
+
+                // Check from
+                assert_eq!(report.from.len(), 1);
+                assert_eq!(report.from[0].value, "fact_sales");
+
+                // Check use_date
+                assert_eq!(report.use_date.len(), 1);
+                assert_eq!(report.use_date[0].value, "order_date");
+
+                // Check period
+                assert!(report.period.is_some());
+                match &report.period.as_ref().unwrap().value {
+                    PeriodExpr::Relative(RelativePeriod::Trailing { count, unit }) => {
+                        assert_eq!(*count, 12);
+                        assert_eq!(*unit, PeriodUnit::Months);
+                    }
+                    _ => panic!("Expected Trailing period"),
+                }
+
+                // Check group
+                assert_eq!(report.group.len(), 1);
+                match &report.group[0].value {
+                    GroupItem::DrillPathRef(drill_ref) => {
+                        assert_eq!(drill_ref.source, "dates");
+                        assert_eq!(drill_ref.path, "standard");
+                        assert_eq!(drill_ref.level, "month");
+                        assert_eq!(drill_ref.label.as_deref(), Some("Month"));
+                    }
+                    _ => panic!("Expected DrillPathRef"),
+                }
+
+                // Check show
+                assert_eq!(report.show.len(), 2);
+                match &report.show[0].value {
+                    ShowItem::Measure { name, label } => {
+                        assert_eq!(name, "revenue");
+                        assert_eq!(label.as_deref(), Some("Revenue"));
+                    }
+                    _ => panic!("Expected Measure"),
+                }
+                match &report.show[1].value {
+                    ShowItem::MeasureWithSuffix { name, suffix, label } => {
+                        assert_eq!(name, "revenue");
+                        assert_eq!(*suffix, TimeSuffix::YoyGrowth);
+                        assert_eq!(label.as_deref(), Some("YoY Growth"));
+                    }
+                    _ => panic!("Expected MeasureWithSuffix"),
+                }
+
+                // Check sort
+                assert_eq!(report.sort.len(), 1);
+                assert_eq!(report.sort[0].value.column, "revenue");
+                assert_eq!(report.sort[0].value.direction, SortDirection::Desc);
+
+                // Check limit
+                assert!(report.limit.is_some());
+                assert_eq!(report.limit.as_ref().unwrap().value, 20);
+            }
+            _ => panic!("Expected Report item"),
+        }
+    }
+
+    #[test]
+    fn test_parse_period_expressions() {
+        // Test relative periods
+        let test_cases = vec![
+            ("today", RelativePeriod::Today),
+            ("yesterday", RelativePeriod::Yesterday),
+            ("this_week", RelativePeriod::ThisWeek),
+            ("this_month", RelativePeriod::ThisMonth),
+            ("this_quarter", RelativePeriod::ThisQuarter),
+            ("this_year", RelativePeriod::ThisYear),
+            ("last_week", RelativePeriod::LastWeek),
+            ("last_month", RelativePeriod::LastMonth),
+            ("last_quarter", RelativePeriod::LastQuarter),
+            ("last_year", RelativePeriod::LastYear),
+            ("ytd", RelativePeriod::Ytd),
+            ("qtd", RelativePeriod::Qtd),
+            ("mtd", RelativePeriod::Mtd),
+        ];
+
+        for (period_str, expected_period) in test_cases {
+            let input = format!(
+                r#"
+                report test {{
+                    from sales;
+                    use_date order_date;
+                    period {};
+                }}
+            "#,
+                period_str
+            );
+            let model = parse_str(&input);
+
+            match &model.items[0].value {
+                Item::Report(report) => {
+                    assert!(report.period.is_some());
+                    match &report.period.as_ref().unwrap().value {
+                        PeriodExpr::Relative(period) => {
+                            assert_eq!(*period, expected_period);
+                        }
+                        _ => panic!("Expected Relative period"),
+                    }
+                }
+                _ => panic!("Expected Report item"),
+            }
+        }
+    }
+
+    #[test]
+    fn test_parse_trailing_periods() {
+        let test_cases = vec![
+            ("last_7_days", 7, PeriodUnit::Days),
+            ("last_4_weeks", 4, PeriodUnit::Weeks),
+            ("last_12_months", 12, PeriodUnit::Months),
+            ("last_4_quarters", 4, PeriodUnit::Quarters),
+            ("last_3_years", 3, PeriodUnit::Years),
+        ];
+
+        for (period_str, expected_count, expected_unit) in test_cases {
+            let input = format!(
+                r#"
+                report test {{
+                    from sales;
+                    use_date order_date;
+                    period {};
+                }}
+            "#,
+                period_str
+            );
+            let model = parse_str(&input);
+
+            match &model.items[0].value {
+                Item::Report(report) => {
+                    assert!(report.period.is_some());
+                    match &report.period.as_ref().unwrap().value {
+                        PeriodExpr::Relative(RelativePeriod::Trailing { count, unit }) => {
+                            assert_eq!(*count, expected_count);
+                            assert_eq!(*unit, expected_unit);
+                        }
+                        _ => panic!("Expected Trailing period"),
+                    }
+                }
+                _ => panic!("Expected Report item"),
+            }
+        }
+    }
+
+    #[test]
+    fn test_parse_report_with_filter() {
+        let input = r#"
+            report filtered {
+                from sales;
+                use_date order_date;
+                filter { region = "North America" };
+            }
+        "#;
+        let model = parse_str(input);
+
+        assert_eq!(model.items.len(), 1);
+        match &model.items[0].value {
+            Item::Report(report) => {
+                assert_eq!(report.name.value, "filtered");
+                assert!(report.filter.is_some());
+                let filter = &report.filter.as_ref().unwrap().value;
+                assert!(filter.sql.contains("region"));
+                assert!(filter.sql.contains("North America"));
+            }
+            _ => panic!("Expected Report item"),
+        }
+    }
+
+    #[test]
+    fn test_parse_report_multiple_sort() {
+        let input = r#"
+            report multi_sort {
+                from sales;
+                use_date order_date;
+                sort revenue.desc, margin.asc, created_at.asc;
+            }
+        "#;
+        let model = parse_str(input);
+
+        match &model.items[0].value {
+            Item::Report(report) => {
+                assert_eq!(report.sort.len(), 3);
+                assert_eq!(report.sort[0].value.column, "revenue");
+                assert_eq!(report.sort[0].value.direction, SortDirection::Desc);
+                assert_eq!(report.sort[1].value.column, "margin");
+                assert_eq!(report.sort[1].value.direction, SortDirection::Asc);
+                assert_eq!(report.sort[2].value.column, "created_at");
+                assert_eq!(report.sort[2].value.direction, SortDirection::Asc);
+            }
+            _ => panic!("Expected Report item"),
+        }
+    }
+
+    #[test]
+    fn test_parse_report_multiple_groups() {
+        let input = r#"
+            report multi_group {
+                from sales;
+                use_date order_date;
+                group {
+                    dates.standard.month as "Month";
+                    customers.geo.region as "Region";
+                    products.hierarchy.category;
+                }
+            }
+        "#;
+        let model = parse_str(input);
+
+        match &model.items[0].value {
+            Item::Report(report) => {
+                assert_eq!(report.group.len(), 3);
+
+                match &report.group[0].value {
+                    GroupItem::DrillPathRef(drill_ref) => {
+                        assert_eq!(drill_ref.source, "dates");
+                        assert_eq!(drill_ref.path, "standard");
+                        assert_eq!(drill_ref.level, "month");
+                        assert_eq!(drill_ref.label.as_deref(), Some("Month"));
+                    }
+                    _ => panic!("Expected DrillPathRef"),
+                }
+
+                match &report.group[1].value {
+                    GroupItem::DrillPathRef(drill_ref) => {
+                        assert_eq!(drill_ref.source, "customers");
+                        assert_eq!(drill_ref.path, "geo");
+                        assert_eq!(drill_ref.level, "region");
+                        assert_eq!(drill_ref.label.as_deref(), Some("Region"));
+                    }
+                    _ => panic!("Expected DrillPathRef"),
+                }
+
+                match &report.group[2].value {
+                    GroupItem::DrillPathRef(drill_ref) => {
+                        assert_eq!(drill_ref.source, "products");
+                        assert_eq!(drill_ref.path, "hierarchy");
+                        assert_eq!(drill_ref.level, "category");
+                        assert!(drill_ref.label.is_none());
+                    }
+                    _ => panic!("Expected DrillPathRef"),
+                }
+            }
+            _ => panic!("Expected Report item"),
+        }
+    }
+
+    #[test]
+    fn test_parse_report_inline_measure() {
+        let input = r#"
+            report with_inline {
+                from sales;
+                use_date order_date;
+                show {
+                    revenue;
+                    margin_pct = { revenue / cost } as "Margin %";
+                }
+            }
+        "#;
+        let model = parse_str(input);
+
+        match &model.items[0].value {
+            Item::Report(report) => {
+                assert_eq!(report.show.len(), 2);
+
+                match &report.show[0].value {
+                    ShowItem::Measure { name, label } => {
+                        assert_eq!(name, "revenue");
+                        assert!(label.is_none());
+                    }
+                    _ => panic!("Expected Measure"),
+                }
+
+                match &report.show[1].value {
+                    ShowItem::InlineMeasure { name, expr, label } => {
+                        assert_eq!(name, "margin_pct");
+                        assert!(expr.sql.contains("revenue"));
+                        assert!(expr.sql.contains("cost"));
+                        assert_eq!(label.as_deref(), Some("Margin %"));
+                    }
+                    _ => panic!("Expected InlineMeasure"),
+                }
+            }
+            _ => panic!("Expected Report item"),
+        }
+    }
+
+    #[test]
+    fn test_parse_report_time_suffixes() {
+        let input = r#"
+            report time_intel {
+                from sales;
+                use_date order_date;
+                show {
+                    revenue.ytd;
+                    revenue.prior_year as "Last Year";
+                    revenue.yoy_growth;
+                    revenue.rolling_12m as "12M Rolling";
+                }
+            }
+        "#;
+        let model = parse_str(input);
+
+        match &model.items[0].value {
+            Item::Report(report) => {
+                assert_eq!(report.show.len(), 4);
+
+                match &report.show[0].value {
+                    ShowItem::MeasureWithSuffix { name, suffix, label } => {
+                        assert_eq!(name, "revenue");
+                        assert_eq!(*suffix, TimeSuffix::Ytd);
+                        assert!(label.is_none());
+                    }
+                    _ => panic!("Expected MeasureWithSuffix"),
+                }
+
+                match &report.show[1].value {
+                    ShowItem::MeasureWithSuffix { name, suffix, label } => {
+                        assert_eq!(name, "revenue");
+                        assert_eq!(*suffix, TimeSuffix::PriorYear);
+                        assert_eq!(label.as_deref(), Some("Last Year"));
+                    }
+                    _ => panic!("Expected MeasureWithSuffix"),
+                }
+
+                match &report.show[2].value {
+                    ShowItem::MeasureWithSuffix { name, suffix, label } => {
+                        assert_eq!(name, "revenue");
+                        assert_eq!(*suffix, TimeSuffix::YoyGrowth);
+                        assert!(label.is_none());
+                    }
+                    _ => panic!("Expected MeasureWithSuffix"),
+                }
+
+                match &report.show[3].value {
+                    ShowItem::MeasureWithSuffix { name, suffix, label } => {
+                        assert_eq!(name, "revenue");
+                        assert_eq!(*suffix, TimeSuffix::Rolling12m);
+                        assert_eq!(label.as_deref(), Some("12M Rolling"));
+                    }
+                    _ => panic!("Expected MeasureWithSuffix"),
+                }
+            }
+            _ => panic!("Expected Report item"),
+        }
+    }
+
+    #[test]
+    fn test_parse_report_multiple_tables() {
+        let input = r#"
+            report combined {
+                from sales, returns;
+                use_date sale_date, return_date;
+            }
+        "#;
+        let model = parse_str(input);
+
+        match &model.items[0].value {
+            Item::Report(report) => {
+                assert_eq!(report.from.len(), 2);
+                assert_eq!(report.from[0].value, "sales");
+                assert_eq!(report.from[1].value, "returns");
+                assert_eq!(report.use_date.len(), 2);
+                assert_eq!(report.use_date[0].value, "sale_date");
+                assert_eq!(report.use_date[1].value, "return_date");
+            }
+            _ => panic!("Expected Report item"),
+        }
+    }
+
+    #[test]
+    fn test_parse_mixed_with_report() {
+        let input = r#"
+            table sales {
+                source "fact_sales";
+            }
+
+            measures sales {
+                revenue = { sum(@amount) };
+            }
+
+            report quarterly {
+                from sales;
+                use_date order_date;
+                period this_quarter;
+                show {
+                    revenue;
+                }
+            }
+        "#;
+        let model = parse_str(input);
+
+        assert_eq!(model.items.len(), 3);
+
+        match &model.items[0].value {
+            Item::Table(t) => assert_eq!(t.name.value, "sales"),
+            _ => panic!("Expected Table"),
+        }
+        match &model.items[1].value {
+            Item::MeasureBlock(mb) => assert_eq!(mb.table.value, "sales"),
+            _ => panic!("Expected MeasureBlock"),
+        }
+        match &model.items[2].value {
+            Item::Report(r) => assert_eq!(r.name.value, "quarterly"),
+            _ => panic!("Expected Report"),
         }
     }
 }
