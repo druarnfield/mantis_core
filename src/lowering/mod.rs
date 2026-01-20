@@ -51,9 +51,30 @@ pub fn lower(ast: ast::Model) -> Result<model::Model, LoweringError> {
     Ok(model)
 }
 
-fn lower_defaults(_defaults: Spanned<ast::Defaults>) -> Result<model::Defaults, LoweringError> {
-    // Placeholder - will implement properly later
-    Ok(model::Defaults::default())
+fn lower_defaults(defaults: Spanned<ast::Defaults>) -> Result<model::Defaults, LoweringError> {
+    let mut result = model::Defaults::default();
+
+    for setting in defaults.value.settings {
+        match setting.value {
+            ast::DefaultSetting::Calendar(cal) => {
+                result.calendar = Some(cal.value);
+            }
+            ast::DefaultSetting::FiscalYearStart(month) => {
+                result.fiscal_year_start = Some(month.value);
+            }
+            ast::DefaultSetting::WeekStart(weekday) => {
+                result.week_start = Some(weekday.value);
+            }
+            ast::DefaultSetting::NullHandling(nh) => {
+                result.null_handling = nh.value;
+            }
+            ast::DefaultSetting::DecimalPlaces(dp) => {
+                result.decimal_places = dp.value;
+            }
+        }
+    }
+
+    Ok(result)
 }
 
 fn lower_calendar(calendar: ast::Calendar) -> Result<model::Calendar, LoweringError> {
@@ -285,9 +306,123 @@ fn lower_measure_block(
     })
 }
 
-fn lower_report(_report: ast::Report) -> Result<model::Report, LoweringError> {
-    // Placeholder
-    Err(LoweringError::NotImplemented("Report".to_string()))
+fn lower_report(report: ast::Report) -> Result<model::Report, LoweringError> {
+    let name = report.name.value;
+    let from: Vec<String> = report.from.into_iter().map(|s| s.value).collect();
+    let use_date: Vec<String> = report.use_date.into_iter().map(|s| s.value).collect();
+
+    // Convert period (placeholder)
+    let period = report.period.map(|_p| {
+        // For now, just use a simple placeholder
+        model::report::PeriodExpr::LastNMonths(12)
+    });
+
+    // Convert group items
+    let mut group = Vec::new();
+    for group_item in report.group {
+        let model_group_item = match group_item.value {
+            ast::GroupItem::DrillPathRef(drill_path_ref) => model::GroupItem::DrillPathRef {
+                source: drill_path_ref.source,
+                path: drill_path_ref.path,
+                level: drill_path_ref.level,
+                label: drill_path_ref.label,
+            },
+            ast::GroupItem::InlineSlicer { name } => {
+                model::GroupItem::InlineSlicer { name, label: None }
+            }
+        };
+        group.push(model_group_item);
+    }
+
+    // Convert show items
+    let mut show = Vec::new();
+    for show_item in report.show {
+        let model_show_item = match show_item.value {
+            ast::ShowItem::Measure { name, label } => model::ShowItem::Measure { name, label },
+            ast::ShowItem::MeasureWithSuffix {
+                name,
+                suffix,
+                label,
+            } => model::ShowItem::MeasureWithSuffix {
+                name,
+                suffix: lower_time_suffix(suffix),
+                label,
+            },
+            ast::ShowItem::InlineMeasure { name, expr, label } => model::ShowItem::InlineMeasure {
+                name,
+                expr: model::table::SqlExpr {
+                    sql: expr.sql,
+                    span: expr.span,
+                },
+                label,
+            },
+        };
+        show.push(model_show_item);
+    }
+
+    // Convert filters
+    let mut filters = Vec::new();
+    if let Some(filter) = report.filter {
+        filters.push(model::table::SqlExpr {
+            sql: filter.value.sql,
+            span: filter.value.span,
+        });
+    }
+
+    // Convert sort
+    let mut sort = Vec::new();
+    for sort_item in report.sort {
+        sort.push(model::report::SortItem {
+            column: sort_item.value.column,
+            direction: match sort_item.value.direction {
+                ast::SortDirection::Asc => model::report::SortDirection::Asc,
+                ast::SortDirection::Desc => model::report::SortDirection::Desc,
+            },
+        });
+    }
+
+    let limit = report.limit.map(|l| l.value);
+
+    Ok(model::Report {
+        name,
+        from,
+        use_date,
+        period,
+        group,
+        show,
+        filters,
+        sort,
+        limit,
+    })
+}
+
+fn lower_time_suffix(suffix: ast::TimeSuffix) -> model::TimeSuffix {
+    match suffix {
+        ast::TimeSuffix::Ytd => model::TimeSuffix::Ytd,
+        ast::TimeSuffix::Qtd => model::TimeSuffix::Qtd,
+        ast::TimeSuffix::Mtd => model::TimeSuffix::Mtd,
+        ast::TimeSuffix::Wtd => model::TimeSuffix::Wtd,
+        ast::TimeSuffix::FiscalYtd => model::TimeSuffix::FiscalYtd,
+        ast::TimeSuffix::FiscalQtd => model::TimeSuffix::FiscalQtd,
+        ast::TimeSuffix::PriorYear => model::TimeSuffix::PriorYear,
+        ast::TimeSuffix::PriorQuarter => model::TimeSuffix::PriorQuarter,
+        ast::TimeSuffix::PriorMonth => model::TimeSuffix::PriorMonth,
+        ast::TimeSuffix::PriorWeek => model::TimeSuffix::PriorWeek,
+        ast::TimeSuffix::YoyGrowth => model::TimeSuffix::YoyGrowth,
+        ast::TimeSuffix::QoqGrowth => model::TimeSuffix::QoqGrowth,
+        ast::TimeSuffix::MomGrowth => model::TimeSuffix::MomGrowth,
+        ast::TimeSuffix::WowGrowth => model::TimeSuffix::WowGrowth,
+        ast::TimeSuffix::YoyDelta => model::TimeSuffix::YoyDelta,
+        ast::TimeSuffix::QoqDelta => model::TimeSuffix::QoqDelta,
+        ast::TimeSuffix::MomDelta => model::TimeSuffix::MomDelta,
+        ast::TimeSuffix::WowDelta => model::TimeSuffix::WowDelta,
+        ast::TimeSuffix::Rolling3m => model::TimeSuffix::Rolling3m,
+        ast::TimeSuffix::Rolling6m => model::TimeSuffix::Rolling6m,
+        ast::TimeSuffix::Rolling12m => model::TimeSuffix::Rolling12m,
+        ast::TimeSuffix::Rolling3mAvg => model::TimeSuffix::Rolling3mAvg,
+        ast::TimeSuffix::Rolling6mAvg => model::TimeSuffix::Rolling6mAvg,
+        ast::TimeSuffix::Rolling12mAvg => model::TimeSuffix::Rolling12mAvg,
+    }
 }
 
 #[derive(Debug, Clone)]

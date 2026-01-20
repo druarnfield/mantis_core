@@ -109,3 +109,11 @@ path = "tests/lowering/table_lowering_test.rs"
 [[test]]
 name = "measure_lowering_test"
 path = "tests/lowering/measure_lowering_test.rs"
+
+[[test]]
+name = "report_lowering_test"
+path = "tests/lowering/report_lowering_test.rs"
+
+[[test]]
+name = "defaults_lowering_test"
+path = "tests/lowering/defaults_lowering_test.rs"
