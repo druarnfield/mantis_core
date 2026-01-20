@@ -1,7 +1,9 @@
 //! Translation of Report model types to SemanticQuery.
 
 use crate::model::{Model, Report};
-use crate::semantic::planner::types::{SelectField, SemanticQuery};
+use crate::semantic::planner::types::{
+    DerivedExpr, DerivedField, SelectField, SemanticQuery, TimeFunction,
+};
 
 /// Translation error.
 #[derive(Debug, Clone)]
@@ -164,6 +166,66 @@ fn translate_simple_measure(
     Ok(select_field)
 }
 
+/// Translate a measure with a time suffix to a SelectField and DerivedField.
+///
+/// Time suffixes like `.ytd` expand into:
+/// 1. A base SelectField for the measure (added to query.select)
+/// 2. A DerivedField with a TimeFunction (added to query.derived)
+///
+/// The DerivedField references the base measure to calculate time-based values.
+fn translate_time_suffix(
+    measure_name: &str,
+    suffix: crate::model::TimeSuffix,
+    label: Option<String>,
+    from_table: &str,
+    model: &Model,
+) -> Result<(SelectField, DerivedField), TranslationError> {
+    // First, ensure the base measure exists
+    let measure_block =
+        model
+            .measures
+            .get(from_table)
+            .ok_or_else(|| TranslationError::UndefinedReference {
+                entity_type: "measure block".to_string(),
+                name: from_table.to_string(),
+            })?;
+
+    let _measure = measure_block.measures.get(measure_name).ok_or_else(|| {
+        TranslationError::InvalidMeasure {
+            measure: measure_name.to_string(),
+            table: from_table.to_string(),
+        }
+    })?;
+
+    // Create base measure select field
+    let base_select = SelectField::new(from_table, measure_name);
+
+    // Create derived field based on suffix
+    let derived_alias = label.unwrap_or_else(|| format!("{}_{:?}", measure_name, suffix));
+
+    let derived_expr = match suffix {
+        crate::model::TimeSuffix::Ytd => DerivedExpr::TimeFunction(TimeFunction::YearToDate {
+            measure: measure_name.to_string(),
+            year_column: None,
+            period_column: None,
+            via: None,
+        }),
+        _ => {
+            return Err(TranslationError::SqlCompilationError {
+                expression: format!("{}.{:?}", measure_name, suffix),
+                error: "Time suffix not yet implemented".to_string(),
+            });
+        }
+    };
+
+    let derived_field = DerivedField {
+        alias: derived_alias,
+        expression: derived_expr,
+    };
+
+    Ok((base_select, derived_field))
+}
+
 /// Translate a Report to a SemanticQuery.
 pub fn translate_report(report: &Report, model: &Model) -> Result<SemanticQuery, TranslationError> {
     let mut query = SemanticQuery::default();
@@ -214,8 +276,15 @@ pub fn translate_report(report: &Report, model: &Model) -> Result<SemanticQuery,
                     translate_simple_measure(name, label.clone(), from_table, model)?;
                 query.select.push(select_field);
             }
-            crate::model::ShowItem::MeasureWithSuffix { .. } => {
-                // TODO: Handle time suffixes
+            crate::model::ShowItem::MeasureWithSuffix {
+                name,
+                suffix,
+                label,
+            } => {
+                let (base_select, derived_field) =
+                    translate_time_suffix(name, *suffix, label.clone(), from_table, model)?;
+                query.select.push(base_select);
+                query.derived.push(derived_field);
             }
             crate::model::ShowItem::InlineMeasure { .. } => {
                 // TODO: Handle inline measures
