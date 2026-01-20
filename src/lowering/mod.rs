@@ -56,9 +56,48 @@ fn lower_defaults(_defaults: Spanned<ast::Defaults>) -> Result<model::Defaults, 
     Ok(model::Defaults::default())
 }
 
-fn lower_calendar(_calendar: ast::Calendar) -> Result<model::Calendar, LoweringError> {
-    // Placeholder
-    Err(LoweringError::NotImplemented("Calendar".to_string()))
+fn lower_calendar(calendar: ast::Calendar) -> Result<model::Calendar, LoweringError> {
+    let name = calendar.name.value;
+
+    let body = match calendar.body {
+        ast::CalendarBody::Physical(phys) => {
+            let source = phys.source.value;
+
+            // Convert grain mappings
+            let mut grain_mappings = std::collections::HashMap::new();
+            for (grain_level, column) in phys.grain_mappings {
+                grain_mappings.insert(grain_level, column.value);
+            }
+
+            // Convert drill paths
+            let mut drill_paths = std::collections::HashMap::new();
+            for drill_path in phys.drill_paths {
+                let path_name = drill_path.name.value.clone();
+                drill_paths.insert(
+                    path_name.clone(),
+                    model::calendar::DrillPath {
+                        name: path_name,
+                        levels: drill_path.levels.into_iter().map(|l| l.value).collect(),
+                    },
+                );
+            }
+
+            model::CalendarBody::Physical(model::calendar::PhysicalCalendar {
+                source,
+                grain_mappings,
+                drill_paths,
+                fiscal_year_start: phys.fiscal_year_start.map(|s| s.value),
+                week_start: phys.week_start.map(|s| s.value),
+            })
+        }
+        ast::CalendarBody::Generated(gen) => model::CalendarBody::Generated {
+            grain: gen.grain.value,
+            from: gen.from.value,
+            to: gen.to.value,
+        },
+    };
+
+    Ok(model::Calendar { name, body })
 }
 
 fn lower_dimension(_dimension: ast::Dimension) -> Result<model::Dimension, LoweringError> {

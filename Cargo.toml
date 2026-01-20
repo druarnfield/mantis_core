@@ -93,3 +93,11 @@ path = "tests/model/dimension_test.rs"
 [[test]]
 name = "report_test"
 path = "tests/model/report_test.rs"
+
+[[test]]
+name = "calendar_lowering_test"
+path = "tests/lowering/calendar_lowering_test.rs"
+
+[[test]]
+name = "dimension_lowering_test"
+path = "tests/lowering/dimension_lowering_test.rs"
