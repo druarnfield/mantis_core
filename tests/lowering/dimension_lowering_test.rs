@@ -1,6 +1,6 @@
-use mantis_core::dsl::ast;
-use mantis_core::dsl::span::{Span, Spanned};
-use mantis_core::lowering;
+use mantis::dsl::ast;
+use mantis::dsl::span::{Span, Spanned};
+use mantis::lowering;
 
 #[test]
 fn test_lower_dimension() {
@@ -21,25 +21,31 @@ fn test_lower_dimension() {
                     span: Span::default(),
                 },
                 attributes: vec![
-                    ast::Attribute {
-                        name: Spanned {
-                            value: "customer_name".to_string(),
-                            span: Span::default(),
+                    Spanned {
+                        value: ast::Attribute {
+                            name: Spanned {
+                                value: "customer_name".to_string(),
+                                span: Span::default(),
+                            },
+                            data_type: Spanned {
+                                value: ast::DataType::String,
+                                span: Span::default(),
+                            },
                         },
-                        data_type: Spanned {
-                            value: ast::DataType::String,
-                            span: Span::default(),
-                        },
+                        span: Span::default(),
                     },
-                    ast::Attribute {
-                        name: Spanned {
-                            value: "region".to_string(),
-                            span: Span::default(),
+                    Spanned {
+                        value: ast::Attribute {
+                            name: Spanned {
+                                value: "region".to_string(),
+                                span: Span::default(),
+                            },
+                            data_type: Spanned {
+                                value: ast::DataType::String,
+                                span: Span::default(),
+                            },
                         },
-                        data_type: Spanned {
-                            value: ast::DataType::String,
-                            span: Span::default(),
-                        },
+                        span: Span::default(),
                     },
                 ],
                 drill_paths: vec![],
@@ -82,25 +88,28 @@ fn test_lower_dimension_with_drill_paths() {
                     span: Span::default(),
                 },
                 attributes: vec![],
-                drill_paths: vec![ast::DimensionDrillPath {
-                    name: Spanned {
-                        value: "geographic".to_string(),
-                        span: Span::default(),
+                drill_paths: vec![Spanned {
+                    value: ast::DrillPath {
+                        name: Spanned {
+                            value: "geographic".to_string(),
+                            span: Span::default(),
+                        },
+                        levels: vec![
+                            Spanned {
+                                value: "city".to_string(),
+                                span: Span::default(),
+                            },
+                            Spanned {
+                                value: "state".to_string(),
+                                span: Span::default(),
+                            },
+                            Spanned {
+                                value: "country".to_string(),
+                                span: Span::default(),
+                            },
+                        ],
                     },
-                    levels: vec![
-                        Spanned {
-                            value: "city".to_string(),
-                            span: Span::default(),
-                        },
-                        Spanned {
-                            value: "state".to_string(),
-                            span: Span::default(),
-                        },
-                        Spanned {
-                            value: "country".to_string(),
-                            span: Span::default(),
-                        },
-                    ],
+                    span: Span::default(),
                 }],
             }),
             span: Span::default(),

@@ -1,8 +1,7 @@
-use mantis_core::dsl::ast;
-use mantis_core::dsl::span::{Span, Spanned};
-use mantis_core::lowering;
-use mantis_core::model::{Calendar, CalendarBody, PhysicalCalendar};
-use std::collections::HashMap;
+use mantis::dsl::ast;
+use mantis::dsl::span::{Span, Spanned};
+use mantis::lowering;
+use mantis::model::CalendarBody;
 
 #[test]
 fn test_lower_physical_calendar() {
@@ -14,31 +13,46 @@ fn test_lower_physical_calendar() {
                     value: "dates".to_string(),
                     span: Span::default(),
                 },
-                body: ast::CalendarBody::Physical(ast::PhysicalCalendar {
-                    source: Spanned {
-                        value: "dbo.dim_date".to_string(),
-                        span: Span::default(),
-                    },
-                    grain_mappings: vec![
-                        (
-                            ast::GrainLevel::Day,
+                body: Spanned {
+                    value: ast::CalendarBody::Physical(ast::PhysicalCalendar {
+                        source: Spanned {
+                            value: "dbo.dim_date".to_string(),
+                            span: Span::default(),
+                        },
+                        grain_mappings: vec![
                             Spanned {
-                                value: "date_key".to_string(),
+                                value: ast::GrainMapping {
+                                    level: Spanned {
+                                        value: ast::GrainLevel::Day,
+                                        span: Span::default(),
+                                    },
+                                    column: Spanned {
+                                        value: "date_key".to_string(),
+                                        span: Span::default(),
+                                    },
+                                },
                                 span: Span::default(),
                             },
-                        ),
-                        (
-                            ast::GrainLevel::Month,
                             Spanned {
-                                value: "month_start_date".to_string(),
+                                value: ast::GrainMapping {
+                                    level: Spanned {
+                                        value: ast::GrainLevel::Month,
+                                        span: Span::default(),
+                                    },
+                                    column: Spanned {
+                                        value: "month_start_date".to_string(),
+                                        span: Span::default(),
+                                    },
+                                },
                                 span: Span::default(),
                             },
-                        ),
-                    ],
-                    drill_paths: vec![],
-                    fiscal_year_start: None,
-                    week_start: None,
-                }),
+                        ],
+                        drill_paths: vec![],
+                        fiscal_year_start: None,
+                        week_start: None,
+                    }),
+                    span: Span::default(),
+                },
             }),
             span: Span::default(),
         }],
@@ -59,7 +73,7 @@ fn test_lower_physical_calendar() {
             assert_eq!(phys.grain_mappings.len(), 2);
             assert_eq!(
                 phys.grain_mappings
-                    .get(&mantis_core::model::GrainLevel::Day)
+                    .get(&mantis::model::GrainLevel::Day)
                     .unwrap(),
                 "date_key"
             );
@@ -78,23 +92,31 @@ fn test_lower_generated_calendar() {
                     value: "auto_dates".to_string(),
                     span: Span::default(),
                 },
-                body: ast::CalendarBody::Generated(ast::GeneratedCalendar {
-                    grain: Spanned {
-                        value: ast::GrainLevel::Day,
-                        span: Span::default(),
-                    },
-                    from: Spanned {
-                        value: "2020-01-01".to_string(),
-                        span: Span::default(),
-                    },
-                    to: Spanned {
-                        value: "2025-12-31".to_string(),
-                        span: Span::default(),
-                    },
-                    fiscal_year_start: None,
-                    drill_paths: vec![],
-                    week_start: None,
-                }),
+                body: Spanned {
+                    value: ast::CalendarBody::Generated(ast::GeneratedCalendar {
+                        base_grain: Spanned {
+                            value: ast::GrainLevel::Day,
+                            span: Span::default(),
+                        },
+                        fiscal: None,
+                        range: Some(Spanned {
+                            value: ast::CalendarRange::Explicit {
+                                start: Spanned {
+                                    value: ast::DateLiteral::new(2020, 1, 1),
+                                    span: Span::default(),
+                                },
+                                end: Spanned {
+                                    value: ast::DateLiteral::new(2025, 12, 31),
+                                    span: Span::default(),
+                                },
+                            },
+                            span: Span::default(),
+                        }),
+                        drill_paths: vec![],
+                        week_start: None,
+                    }),
+                    span: Span::default(),
+                },
             }),
             span: Span::default(),
         }],
@@ -108,7 +130,7 @@ fn test_lower_generated_calendar() {
 
     match &calendar.body {
         CalendarBody::Generated { grain, from, to } => {
-            assert_eq!(*grain, mantis_core::model::GrainLevel::Day);
+            assert_eq!(*grain, mantis::model::GrainLevel::Day);
             assert_eq!(from, "2020-01-01");
             assert_eq!(to, "2025-12-31");
         }

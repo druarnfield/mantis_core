@@ -59,25 +59,36 @@ fn lower_defaults(_defaults: Spanned<ast::Defaults>) -> Result<model::Defaults, 
 fn lower_calendar(calendar: ast::Calendar) -> Result<model::Calendar, LoweringError> {
     let name = calendar.name.value;
 
-    let body = match calendar.body {
+    let body = match calendar.body.value {
         ast::CalendarBody::Physical(phys) => {
             let source = phys.source.value;
 
-            // Convert grain mappings
+            // Convert grain mappings from Vec<Spanned<GrainMapping>> to HashMap
             let mut grain_mappings = std::collections::HashMap::new();
-            for (grain_level, column) in phys.grain_mappings {
-                grain_mappings.insert(grain_level, column.value);
+            for mapping in phys.grain_mappings {
+                grain_mappings.insert(mapping.value.level.value, mapping.value.column.value);
             }
 
             // Convert drill paths
             let mut drill_paths = std::collections::HashMap::new();
             for drill_path in phys.drill_paths {
-                let path_name = drill_path.name.value.clone();
+                let path_name = drill_path.value.name.value.clone();
+                // Drill paths contain GrainLevel enums, not strings - need to convert
+                let levels: Vec<model::types::GrainLevel> = drill_path
+                    .value
+                    .levels
+                    .into_iter()
+                    .filter_map(|level_str| {
+                        // Parse string level names to GrainLevel enums
+                        ast::GrainLevel::from_str(&level_str.value)
+                    })
+                    .collect();
+
                 drill_paths.insert(
                     path_name.clone(),
                     model::calendar::DrillPath {
                         name: path_name,
-                        levels: drill_path.levels.into_iter().map(|l| l.value).collect(),
+                        levels,
                     },
                 );
             }
@@ -90,11 +101,33 @@ fn lower_calendar(calendar: ast::Calendar) -> Result<model::Calendar, LoweringEr
                 week_start: phys.week_start.map(|s| s.value),
             })
         }
-        ast::CalendarBody::Generated(gen) => model::CalendarBody::Generated {
-            grain: gen.grain.value,
-            from: gen.from.value,
-            to: gen.to.value,
-        },
+        ast::CalendarBody::Generated(gen) => {
+            // Extract from/to from the range
+            let (from, to) = match gen.range {
+                Some(range) => match range.value {
+                    ast::CalendarRange::Explicit { start, end } => {
+                        (start.value.to_string(), end.value.to_string())
+                    }
+                    ast::CalendarRange::Infer { min, max } => {
+                        // For inferred ranges, use min/max if provided, otherwise use placeholders
+                        let from = min
+                            .map(|d| d.value.to_string())
+                            .unwrap_or_else(|| "INFER_MIN".to_string());
+                        let to = max
+                            .map(|d| d.value.to_string())
+                            .unwrap_or_else(|| "INFER_MAX".to_string());
+                        (from, to)
+                    }
+                },
+                None => ("INFER_MIN".to_string(), "INFER_MAX".to_string()),
+            };
+
+            model::CalendarBody::Generated {
+                grain: gen.base_grain.value,
+                from,
+                to,
+            }
+        }
     };
 
     Ok(model::Calendar { name, body })
@@ -105,28 +138,33 @@ fn lower_dimension(dimension: ast::Dimension) -> Result<model::Dimension, Loweri
     let source = dimension.source.value;
     let key = dimension.key.value;
 
-    // Convert attributes
+    // Convert attributes from Vec<Spanned<Attribute>>
     let mut attributes = std::collections::HashMap::new();
     for attr in dimension.attributes {
-        let attr_name = attr.name.value.clone();
+        let attr_name = attr.value.name.value.clone();
         attributes.insert(
             attr_name.clone(),
             model::dimension::Attribute {
                 name: attr_name,
-                data_type: attr.data_type.value,
+                data_type: attr.value.data_type.value,
             },
         );
     }
 
-    // Convert drill paths
+    // Convert drill paths from Vec<Spanned<DrillPath>>
     let mut drill_paths = std::collections::HashMap::new();
     for drill_path in dimension.drill_paths {
-        let path_name = drill_path.name.value.clone();
+        let path_name = drill_path.value.name.value.clone();
         drill_paths.insert(
             path_name.clone(),
             model::dimension::DimensionDrillPath {
                 name: path_name,
-                levels: drill_path.levels.into_iter().map(|l| l.value).collect(),
+                levels: drill_path
+                    .value
+                    .levels
+                    .into_iter()
+                    .map(|l| l.value)
+                    .collect(),
             },
         );
     }
