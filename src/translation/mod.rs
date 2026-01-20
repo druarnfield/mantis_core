@@ -47,6 +47,44 @@ impl std::fmt::Display for TranslationError {
 
 impl std::error::Error for TranslationError {}
 
+/// Resolve an inline slicer reference to a FieldRef.
+///
+/// An inline slicer is a grouping dimension defined directly on a table.
+/// The slicer name IS the column name for inline slicers.
+///
+/// This resolves to a FieldRef pointing to the table and column.
+fn resolve_inline_slicer(
+    slicer_name: &str,
+    from_table: &str,
+    model: &Model,
+) -> Result<crate::semantic::planner::types::FieldRef, TranslationError> {
+    // Get the table
+    let table =
+        model
+            .tables
+            .get(from_table)
+            .ok_or_else(|| TranslationError::UndefinedReference {
+                entity_type: "table".to_string(),
+                name: from_table.to_string(),
+            })?;
+
+    // Verify the slicer exists in the table
+    let _slicer =
+        table
+            .slicers
+            .get(slicer_name)
+            .ok_or_else(|| TranslationError::UndefinedReference {
+                entity_type: "slicer".to_string(),
+                name: slicer_name.to_string(),
+            })?;
+
+    // For inline slicers, the field name is the slicer name
+    Ok(crate::semantic::planner::types::FieldRef::new(
+        from_table,
+        slicer_name,
+    ))
+}
+
 /// Resolve a drill path reference to a FieldRef.
 ///
 /// A drill path reference has three parts:
@@ -440,8 +478,9 @@ pub fn translate_report(report: &Report, model: &Model) -> Result<SemanticQuery,
                 let field_ref = resolve_drill_path_reference(source, path, level, model)?;
                 query.group_by.push(field_ref);
             }
-            crate::model::GroupItem::InlineSlicer { .. } => {
-                // TODO: Resolve slicer reference
+            crate::model::GroupItem::InlineSlicer { name, .. } => {
+                let field_ref = resolve_inline_slicer(name, from_table, model)?;
+                query.group_by.push(field_ref);
             }
         }
     }

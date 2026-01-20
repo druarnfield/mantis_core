@@ -69,6 +69,64 @@ fn test_translate_empty_from_returns_error() {
 }
 
 #[test]
+fn test_translate_inline_slicer() {
+    use mantis::model::{DataType, GroupItem, Slicer, Table};
+
+    let mut tables = HashMap::new();
+    let mut slicers = HashMap::new();
+    slicers.insert(
+        "region".to_string(),
+        Slicer::Inline {
+            name: "region".to_string(),
+            data_type: DataType::String,
+        },
+    );
+
+    tables.insert(
+        "fact_sales".to_string(),
+        Table {
+            name: "fact_sales".to_string(),
+            source: "dbo.fact_sales".to_string(),
+            atoms: HashMap::new(),
+            times: HashMap::new(),
+            slicers,
+        },
+    );
+
+    let model = Model {
+        defaults: None,
+        calendars: HashMap::new(),
+        dimensions: HashMap::new(),
+        tables,
+        measures: HashMap::new(),
+        reports: HashMap::new(),
+    };
+
+    let report = Report {
+        name: "test_report".to_string(),
+        from: vec!["fact_sales".to_string()],
+        use_date: vec![],
+        period: None,
+        group: vec![GroupItem::InlineSlicer {
+            name: "region".to_string(),
+            label: Some("Region".to_string()),
+        }],
+        show: vec![],
+        filters: vec![],
+        sort: vec![],
+        limit: None,
+    };
+
+    let result = translation::translate_report(&report, &model);
+    assert!(result.is_ok());
+
+    let query = result.unwrap();
+    assert_eq!(query.group_by.len(), 1);
+    assert_eq!(query.group_by[0].entity, "fact_sales");
+    assert_eq!(query.group_by[0].field, "region");
+}
+
+#[test]
 fn test_translate_multiple_tables_returns_error() {
     let model = Model {
         defaults: None,
