@@ -100,9 +100,44 @@ fn lower_calendar(calendar: ast::Calendar) -> Result<model::Calendar, LoweringEr
     Ok(model::Calendar { name, body })
 }
 
-fn lower_dimension(_dimension: ast::Dimension) -> Result<model::Dimension, LoweringError> {
-    // Placeholder
-    Err(LoweringError::NotImplemented("Dimension".to_string()))
+fn lower_dimension(dimension: ast::Dimension) -> Result<model::Dimension, LoweringError> {
+    let name = dimension.name.value;
+    let source = dimension.source.value;
+    let key = dimension.key.value;
+
+    // Convert attributes
+    let mut attributes = std::collections::HashMap::new();
+    for attr in dimension.attributes {
+        let attr_name = attr.name.value.clone();
+        attributes.insert(
+            attr_name.clone(),
+            model::dimension::Attribute {
+                name: attr_name,
+                data_type: attr.data_type.value,
+            },
+        );
+    }
+
+    // Convert drill paths
+    let mut drill_paths = std::collections::HashMap::new();
+    for drill_path in dimension.drill_paths {
+        let path_name = drill_path.name.value.clone();
+        drill_paths.insert(
+            path_name.clone(),
+            model::dimension::DimensionDrillPath {
+                name: path_name,
+                levels: drill_path.levels.into_iter().map(|l| l.value).collect(),
+            },
+        );
+    }
+
+    Ok(model::Dimension {
+        name,
+        source,
+        key,
+        attributes,
+        drill_paths,
+    })
 }
 
 fn lower_table(_table: ast::Table) -> Result<model::Table, LoweringError> {
