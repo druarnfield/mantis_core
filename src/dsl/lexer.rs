@@ -572,7 +572,8 @@ pub fn lexer<'src>(
 
     // Numbers: integers, decimals, and date literals (YYYY-MM-DD)
     // We parse a broad pattern and let the parser handle validation
-    let number = text::int(10)
+    // Use text::digits instead of text::int to parse all consecutive digits including leading zeros
+    let number = text::digits(10)
         .then(just('.').then(text::digits(10)).or_not())
         .to_slice()
         .map(Token::Number);

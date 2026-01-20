@@ -28,10 +28,23 @@ where
     // Basic token parsers
     // ==========================================================================
 
-    // Parse an identifier
+    // Parse an identifier (also allow keywords as identifiers in certain contexts)
     let ident = select! {
         Token::Ident(s) => s.to_string(),
     }.labelled("identifier");
+
+    // Parse an identifier or keyword that can be used as a name
+    // This allows reserved words like "fiscal" to be used as calendar/table names
+    let ident_or_keyword = select! {
+        Token::Ident(s) => s.to_string(),
+        Token::Fiscal => "fiscal".to_string(),
+        Token::Min => "min".to_string(),
+        Token::Max => "max".to_string(),
+        Token::Generate => "generate".to_string(),
+        Token::Include => "include".to_string(),
+        Token::Range => "range".to_string(),
+        Token::Infer => "infer".to_string(),
+    }.labelled("identifier or keyword");
 
     // Parse a string literal
     let string_lit = select! {
@@ -69,6 +82,51 @@ where
         Token::FiscalQuarter => GrainLevel::FiscalQuarter,
         Token::FiscalYear => GrainLevel::FiscalYear,
     }.labelled("grain level");
+
+    // Parse a month
+    let month = select! {
+        Token::January => Month::January,
+        Token::February => Month::February,
+        Token::March => Month::March,
+        Token::April => Month::April,
+        Token::May => Month::May,
+        Token::June => Month::June,
+        Token::July => Month::July,
+        Token::August => Month::August,
+        Token::September => Month::September,
+        Token::October => Month::October,
+        Token::November => Month::November,
+        Token::December => Month::December,
+    }.labelled("month");
+
+    // Parse a weekday
+    let weekday = select! {
+        Token::Monday => Weekday::Monday,
+        Token::Tuesday => Weekday::Tuesday,
+        Token::Wednesday => Weekday::Wednesday,
+        Token::Thursday => Weekday::Thursday,
+        Token::Friday => Weekday::Friday,
+        Token::Saturday => Weekday::Saturday,
+        Token::Sunday => Weekday::Sunday,
+    }.labelled("weekday");
+
+    // Parse a date literal from a Number token (YYYY-MM-DD format)
+    // The lexer produces numbers like "2024" or "2024.01" but dates are YYYY-MM-DD
+    // We need to parse sequences: Number("-")Number("-")Number
+    let date_literal = select! {
+        Token::Number(s) => s,
+    }
+    .then_ignore(just(Token::Minus))
+    .then(select! { Token::Number(s) => s })
+    .then_ignore(just(Token::Minus))
+    .then(select! { Token::Number(s) => s })
+    .try_map(|((year_str, month_str), day_str), span| {
+        let year: u16 = year_str.parse().map_err(|_| Rich::custom(span, "invalid year"))?;
+        let month: u8 = month_str.parse().map_err(|_| Rich::custom(span, "invalid month"))?;
+        let day: u8 = day_str.parse().map_err(|_| Rich::custom(span, "invalid day"))?;
+        Ok(DateLiteral::new(year, month, day))
+    })
+    .labelled("date literal (YYYY-MM-DD)");
 
     // ==========================================================================
     // Atoms block: atoms { name type; ... }
@@ -237,6 +295,429 @@ where
         );
 
     // ==========================================================================
+    // Drill Path: drill_path name { level1 -> level2 -> ... };
+    // ==========================================================================
+
+    // Parse a drill path level (identifier or grain keyword treated as identifier)
+    let drill_level = ident.clone()
+        .or(grain_level.clone().map(|g| g.to_string()))
+        .map_with(|s, e| Spanned::new(s, to_span(e.span())));
+
+    // drill_path name { level -> level -> ... };
+    let drill_path = just(Token::DrillPath)
+        .ignore_then(
+            ident.clone()
+                .map_with(|n, e| Spanned::new(n, to_span(e.span())))
+        )
+        .then(
+            drill_level.clone()
+                .separated_by(just(Token::Arrow))
+                .at_least(1)
+                .collect::<Vec<_>>()
+                .delimited_by(just(Token::LBrace), just(Token::RBrace))
+        )
+        .then_ignore(just(Token::Semicolon))
+        .map(|(name, levels)| DrillPath { name, levels });
+
+    // ==========================================================================
+    // Calendar definitions (Generated and Physical)
+    // ==========================================================================
+
+    // Generate statement: generate grain+;
+    // e.g., generate day+;
+    let generate_stmt = just(Token::Generate)
+        .ignore_then(
+            grain_level.clone()
+                .map_with(|g, e| Spanned::new(g, to_span(e.span())))
+        )
+        .then_ignore(just(Token::Plus))
+        .then_ignore(just(Token::Semicolon));
+
+    // Range statement: range infer min DATE max DATE; or range DATE to DATE;
+    // For generated calendars: range infer min 2020-01-01 max 2030-12-31;
+    let range_infer = just(Token::Range)
+        .ignore_then(just(Token::Infer))
+        .then(
+            just(Token::Min)
+                .ignore_then(
+                    date_literal.clone()
+                        .map_with(|d, e| Spanned::new(d, to_span(e.span())))
+                )
+                .or_not()
+        )
+        .then(
+            just(Token::Max)
+                .ignore_then(
+                    date_literal.clone()
+                        .map_with(|d, e| Spanned::new(d, to_span(e.span())))
+                )
+                .or_not()
+        )
+        .then_ignore(just(Token::Semicolon))
+        .map(|((_, min), max)| CalendarRange::Infer { min, max });
+
+    let range_explicit = just(Token::Range)
+        .ignore_then(
+            date_literal.clone()
+                .map_with(|d, e| Spanned::new(d, to_span(e.span())))
+        )
+        .then_ignore(just(Token::To))
+        .then(
+            date_literal.clone()
+                .map_with(|d, e| Spanned::new(d, to_span(e.span())))
+        )
+        .then_ignore(just(Token::Semicolon))
+        .map(|(start, end)| CalendarRange::Explicit { start, end });
+
+    let range_stmt = choice((range_infer, range_explicit))
+        .map_with(|r, e| Spanned::new(r, to_span(e.span())));
+
+    // week_start statement: week_start Monday;
+    let week_start_stmt = just(Token::WeekStart)
+        .ignore_then(
+            weekday.clone()
+                .map_with(|w, e| Spanned::new(w, to_span(e.span())))
+        )
+        .then_ignore(just(Token::Semicolon));
+
+    // fiscal_year_start statement: fiscal_year_start July;
+    let fiscal_year_start_stmt = just(Token::FiscalYearStart)
+        .ignore_then(
+            month.clone()
+                .map_with(|m, e| Spanned::new(m, to_span(e.span())))
+        )
+        .then_ignore(just(Token::Semicolon));
+
+    // Grain mapping for physical calendar: grain = column;
+    // e.g., day = date_key;
+    let grain_mapping = grain_level.clone()
+        .map_with(|g, e| Spanned::new(g, to_span(e.span())))
+        .then_ignore(just(Token::Eq))
+        .then(
+            ident.clone()
+                .map_with(|c, e| Spanned::new(c, to_span(e.span())))
+        )
+        .then_ignore(just(Token::Semicolon))
+        .map(|(level, column)| GrainMapping { level, column });
+
+    // Generated calendar body (inside braces):
+    // - generate grain+;
+    // - range ...;  (optional)
+    // - drill_path ... { ... };  (zero or more)
+    // - week_start ...;  (optional)
+    // We need a flexible parser that handles these in any order
+    #[derive(Clone)]
+    enum GenCalPart {
+        Generate(Spanned<GrainLevel>),
+        Range(Spanned<CalendarRange>),
+        DrillPath(Spanned<DrillPath>),
+        WeekStart(Spanned<Weekday>),
+    }
+
+    let gen_cal_part = choice((
+        generate_stmt.clone().map(GenCalPart::Generate),
+        range_stmt.clone().map(GenCalPart::Range),
+        drill_path.clone()
+            .map_with(|dp, e| Spanned::new(dp, to_span(e.span())))
+            .map(GenCalPart::DrillPath),
+        week_start_stmt.clone().map(GenCalPart::WeekStart),
+    ));
+
+    // Generated calendar: calendar name { generate ...; ... }
+    // Detected by having no source string after name
+    let generated_calendar_body = gen_cal_part
+        .repeated()
+        .at_least(1)
+        .collect::<Vec<_>>()
+        .try_map(|parts, span| {
+            let mut base_grain: Option<Spanned<GrainLevel>> = None;
+            let mut range: Option<Spanned<CalendarRange>> = None;
+            let mut drill_paths: Vec<Spanned<DrillPath>> = Vec::new();
+            let mut week_start: Option<Spanned<Weekday>> = None;
+
+            for part in parts {
+                match part {
+                    GenCalPart::Generate(g) => {
+                        if base_grain.is_some() {
+                            return Err(Rich::custom(span, "duplicate generate statement"));
+                        }
+                        base_grain = Some(g);
+                    }
+                    GenCalPart::Range(r) => {
+                        if range.is_some() {
+                            return Err(Rich::custom(span, "duplicate range statement"));
+                        }
+                        range = Some(r);
+                    }
+                    GenCalPart::DrillPath(dp) => {
+                        drill_paths.push(dp);
+                    }
+                    GenCalPart::WeekStart(w) => {
+                        if week_start.is_some() {
+                            return Err(Rich::custom(span, "duplicate week_start statement"));
+                        }
+                        week_start = Some(w);
+                    }
+                }
+            }
+
+            let base_grain = base_grain.ok_or_else(|| {
+                Rich::custom(span, "generated calendar requires generate statement")
+            })?;
+
+            Ok(GeneratedCalendar {
+                base_grain,
+                fiscal: None, // TODO: implement fiscal grain support
+                range,
+                drill_paths,
+                week_start,
+            })
+        });
+
+    // Physical calendar body (inside braces):
+    // - grain = column;  (one or more)
+    // - drill_path ... { ... };  (zero or more)
+    // - fiscal_year_start ...;  (optional)
+    // - week_start ...;  (optional)
+    #[derive(Clone)]
+    enum PhysCalPart {
+        GrainMapping(Spanned<GrainMapping>),
+        DrillPath(Spanned<DrillPath>),
+        FiscalYearStart(Spanned<Month>),
+        WeekStart(Spanned<Weekday>),
+    }
+
+    let phys_cal_part = choice((
+        grain_mapping.clone()
+            .map_with(|gm, e| Spanned::new(gm, to_span(e.span())))
+            .map(PhysCalPart::GrainMapping),
+        drill_path.clone()
+            .map_with(|dp, e| Spanned::new(dp, to_span(e.span())))
+            .map(PhysCalPart::DrillPath),
+        fiscal_year_start_stmt.clone().map(PhysCalPart::FiscalYearStart),
+        week_start_stmt.clone().map(PhysCalPart::WeekStart),
+    ));
+
+    let physical_calendar_body = phys_cal_part
+        .repeated()
+        .at_least(1)
+        .collect::<Vec<_>>()
+        .try_map(|parts, span| {
+            let mut grain_mappings: Vec<Spanned<GrainMapping>> = Vec::new();
+            let mut drill_paths: Vec<Spanned<DrillPath>> = Vec::new();
+            let mut fiscal_year_start: Option<Spanned<Month>> = None;
+            let mut week_start: Option<Spanned<Weekday>> = None;
+
+            for part in parts {
+                match part {
+                    PhysCalPart::GrainMapping(gm) => {
+                        grain_mappings.push(gm);
+                    }
+                    PhysCalPart::DrillPath(dp) => {
+                        drill_paths.push(dp);
+                    }
+                    PhysCalPart::FiscalYearStart(f) => {
+                        if fiscal_year_start.is_some() {
+                            return Err(Rich::custom(span, "duplicate fiscal_year_start statement"));
+                        }
+                        fiscal_year_start = Some(f);
+                    }
+                    PhysCalPart::WeekStart(w) => {
+                        if week_start.is_some() {
+                            return Err(Rich::custom(span, "duplicate week_start statement"));
+                        }
+                        week_start = Some(w);
+                    }
+                }
+            }
+
+            if grain_mappings.is_empty() {
+                return Err(Rich::custom(span, "physical calendar requires at least one grain mapping"));
+            }
+
+            Ok((grain_mappings, drill_paths, fiscal_year_start, week_start))
+        });
+
+    // Physical calendar: calendar name "source" { ... }
+    // Has a source string after the name
+    let physical_calendar = just(Token::Calendar)
+        .ignore_then(
+            ident_or_keyword.clone()
+                .map_with(|n, e| Spanned::new(n, to_span(e.span())))
+        )
+        .then(
+            string_lit.clone()
+                .map_with(|s, e| Spanned::new(s, to_span(e.span())))
+        )
+        .then(
+            physical_calendar_body
+                .delimited_by(just(Token::LBrace), just(Token::RBrace))
+                .map_with(|body, e| (body, to_span(e.span())))
+        )
+        .map(|((name, source), ((grain_mappings, drill_paths, fiscal_year_start, week_start), body_span))| {
+            let body = CalendarBody::Physical(PhysicalCalendar {
+                source,
+                grain_mappings,
+                drill_paths,
+                fiscal_year_start,
+                week_start,
+            });
+            Calendar {
+                name,
+                body: Spanned::new(body, body_span),
+            }
+        });
+
+    // Generated calendar: calendar name { generate ...; ... }
+    // No source string after the name
+    let generated_calendar = just(Token::Calendar)
+        .ignore_then(
+            ident_or_keyword.clone()
+                .map_with(|n, e| Spanned::new(n, to_span(e.span())))
+        )
+        .then(
+            generated_calendar_body
+                .delimited_by(just(Token::LBrace), just(Token::RBrace))
+                .map_with(|body, e| (body, to_span(e.span())))
+        )
+        .map(|(name, (gen_cal, body_span))| {
+            let body = CalendarBody::Generated(gen_cal);
+            Calendar {
+                name,
+                body: Spanned::new(body, body_span),
+            }
+        });
+
+    // Calendar: try physical first (has string lit), then generated
+    let calendar = physical_calendar
+        .or(generated_calendar);
+
+    // ==========================================================================
+    // Dimension definition
+    // ==========================================================================
+
+    // Attribute: name type;
+    let attribute = ident.clone()
+        .map_with(|n, e| Spanned::new(n, to_span(e.span())))
+        .then(
+            data_type.clone()
+                .map_with(|t, e| Spanned::new(t, to_span(e.span())))
+        )
+        .then_ignore(just(Token::Semicolon))
+        .map(|(name, data_type)| Attribute { name, data_type });
+
+    // Attributes block: attributes { name type; ... }
+    let attributes_block = just(Token::Attributes)
+        .ignore_then(
+            attribute
+                .map_with(|a, e| Spanned::new(a, to_span(e.span())))
+                .repeated()
+                .collect::<Vec<_>>()
+                .delimited_by(just(Token::LBrace), just(Token::RBrace))
+        );
+
+    // Dimension body parts
+    #[derive(Clone)]
+    enum DimPart {
+        Source(Spanned<String>),
+        Key(Spanned<String>),
+        Attributes(Vec<Spanned<Attribute>>),
+        DrillPath(Spanned<DrillPath>),
+    }
+
+    let dim_source = just(Token::Source)
+        .ignore_then(
+            string_lit.clone()
+                .map_with(|s, e| Spanned::new(s, to_span(e.span())))
+        )
+        .then_ignore(just(Token::Semicolon))
+        .map(DimPart::Source);
+
+    let dim_key = just(Token::Key)
+        .ignore_then(
+            ident.clone()
+                .map_with(|k, e| Spanned::new(k, to_span(e.span())))
+        )
+        .then_ignore(just(Token::Semicolon))
+        .map(DimPart::Key);
+
+    let dim_attributes = attributes_block.clone().map(DimPart::Attributes);
+
+    let dim_drill_path = drill_path.clone()
+        .map_with(|dp, e| Spanned::new(dp, to_span(e.span())))
+        .map(DimPart::DrillPath);
+
+    let dim_part = choice((
+        dim_source,
+        dim_key,
+        dim_attributes,
+        dim_drill_path,
+    ));
+
+    let dimension_body = dim_part
+        .repeated()
+        .at_least(1)
+        .collect::<Vec<_>>()
+        .try_map(|parts, span| {
+            let mut source: Option<Spanned<String>> = None;
+            let mut key: Option<Spanned<String>> = None;
+            let mut attributes: Vec<Spanned<Attribute>> = Vec::new();
+            let mut drill_paths: Vec<Spanned<DrillPath>> = Vec::new();
+
+            for part in parts {
+                match part {
+                    DimPart::Source(s) => {
+                        if source.is_some() {
+                            return Err(Rich::custom(span, "duplicate source statement"));
+                        }
+                        source = Some(s);
+                    }
+                    DimPart::Key(k) => {
+                        if key.is_some() {
+                            return Err(Rich::custom(span, "duplicate key statement"));
+                        }
+                        key = Some(k);
+                    }
+                    DimPart::Attributes(attrs) => {
+                        attributes.extend(attrs);
+                    }
+                    DimPart::DrillPath(dp) => {
+                        drill_paths.push(dp);
+                    }
+                }
+            }
+
+            let source = source.ok_or_else(|| {
+                Rich::custom(span, "dimension requires source statement")
+            })?;
+            let key = key.ok_or_else(|| {
+                Rich::custom(span, "dimension requires key statement")
+            })?;
+
+            Ok((source, key, attributes, drill_paths))
+        });
+
+    // dimension name { source "..."; key ...; attributes { ... } drill_path ... { ... }; }
+    let dimension = just(Token::Dimension)
+        .ignore_then(
+            ident.clone()
+                .map_with(|n, e| Spanned::new(n, to_span(e.span())))
+        )
+        .then(
+            dimension_body
+                .delimited_by(just(Token::LBrace), just(Token::RBrace))
+        )
+        .map(|(name, (source, key, attributes, drill_paths))| {
+            Dimension {
+                name,
+                source,
+                key,
+                attributes,
+                drill_paths,
+            }
+        });
+
+    // ==========================================================================
     // Table definition
     // ==========================================================================
 
@@ -273,8 +754,12 @@ where
     // Top-level items
     // ==========================================================================
 
-    // For now, only parse tables
-    let item = table.map(Item::Table);
+    // Parse any top-level item: calendar, dimension, or table
+    let item = choice((
+        calendar.map(Item::Calendar),
+        dimension.map(Item::Dimension),
+        table.map(Item::Table),
+    ));
 
     // The model is a list of items
     item
@@ -656,6 +1141,425 @@ mod tests {
                 }
             }
             _ => panic!("Expected Table item"),
+        }
+    }
+
+    // ==========================================================================
+    // Calendar parsing tests
+    // ==========================================================================
+
+    #[test]
+    fn test_parse_generated_calendar() {
+        let input = r#"
+            calendar auto {
+                generate day+;
+                range infer min 2020-01-01 max 2030-12-31;
+                drill_path standard { day -> week -> month -> quarter -> year };
+                week_start Monday;
+            }
+        "#;
+        let model = parse_str(input);
+
+        assert_eq!(model.items.len(), 1);
+        match &model.items[0].value {
+            Item::Calendar(cal) => {
+                assert_eq!(cal.name.value, "auto");
+
+                match &cal.body.value {
+                    CalendarBody::Generated(gen) => {
+                        // Check base grain
+                        assert_eq!(gen.base_grain.value, GrainLevel::Day);
+
+                        // Check range
+                        assert!(gen.range.is_some());
+                        match &gen.range.as_ref().unwrap().value {
+                            CalendarRange::Infer { min, max } => {
+                                assert!(min.is_some());
+                                let min_date = &min.as_ref().unwrap().value;
+                                assert_eq!(min_date.year, 2020);
+                                assert_eq!(min_date.month, 1);
+                                assert_eq!(min_date.day, 1);
+
+                                assert!(max.is_some());
+                                let max_date = &max.as_ref().unwrap().value;
+                                assert_eq!(max_date.year, 2030);
+                                assert_eq!(max_date.month, 12);
+                                assert_eq!(max_date.day, 31);
+                            }
+                            _ => panic!("Expected Infer range"),
+                        }
+
+                        // Check drill_path
+                        assert_eq!(gen.drill_paths.len(), 1);
+                        let dp = &gen.drill_paths[0].value;
+                        assert_eq!(dp.name.value, "standard");
+                        assert_eq!(dp.levels.len(), 5);
+                        assert_eq!(dp.levels[0].value, "day");
+                        assert_eq!(dp.levels[1].value, "week");
+                        assert_eq!(dp.levels[2].value, "month");
+                        assert_eq!(dp.levels[3].value, "quarter");
+                        assert_eq!(dp.levels[4].value, "year");
+
+                        // Check week_start
+                        assert!(gen.week_start.is_some());
+                        assert_eq!(gen.week_start.as_ref().unwrap().value, Weekday::Monday);
+                    }
+                    _ => panic!("Expected Generated calendar"),
+                }
+            }
+            _ => panic!("Expected Calendar item"),
+        }
+    }
+
+    #[test]
+    fn test_parse_generated_calendar_minimal() {
+        let input = r#"
+            calendar dates {
+                generate day+;
+            }
+        "#;
+        let model = parse_str(input);
+
+        assert_eq!(model.items.len(), 1);
+        match &model.items[0].value {
+            Item::Calendar(cal) => {
+                assert_eq!(cal.name.value, "dates");
+
+                match &cal.body.value {
+                    CalendarBody::Generated(gen) => {
+                        assert_eq!(gen.base_grain.value, GrainLevel::Day);
+                        assert!(gen.range.is_none());
+                        assert!(gen.drill_paths.is_empty());
+                        assert!(gen.week_start.is_none());
+                    }
+                    _ => panic!("Expected Generated calendar"),
+                }
+            }
+            _ => panic!("Expected Calendar item"),
+        }
+    }
+
+    #[test]
+    fn test_parse_physical_calendar() {
+        let input = r#"
+            calendar fiscal "dbo.dim_date" {
+                day = date_key;
+                week = week_start_date;
+                month = month_start_date;
+                drill_path standard { day -> week -> month };
+                fiscal_year_start July;
+            }
+        "#;
+        let model = parse_str(input);
+
+        assert_eq!(model.items.len(), 1);
+        match &model.items[0].value {
+            Item::Calendar(cal) => {
+                assert_eq!(cal.name.value, "fiscal");
+
+                match &cal.body.value {
+                    CalendarBody::Physical(phys) => {
+                        // Check source
+                        assert_eq!(phys.source.value, "dbo.dim_date");
+
+                        // Check grain mappings
+                        assert_eq!(phys.grain_mappings.len(), 3);
+                        assert_eq!(phys.grain_mappings[0].value.level.value, GrainLevel::Day);
+                        assert_eq!(phys.grain_mappings[0].value.column.value, "date_key");
+                        assert_eq!(phys.grain_mappings[1].value.level.value, GrainLevel::Week);
+                        assert_eq!(phys.grain_mappings[1].value.column.value, "week_start_date");
+                        assert_eq!(phys.grain_mappings[2].value.level.value, GrainLevel::Month);
+                        assert_eq!(phys.grain_mappings[2].value.column.value, "month_start_date");
+
+                        // Check drill_path
+                        assert_eq!(phys.drill_paths.len(), 1);
+                        let dp = &phys.drill_paths[0].value;
+                        assert_eq!(dp.name.value, "standard");
+                        assert_eq!(dp.levels.len(), 3);
+
+                        // Check fiscal_year_start
+                        assert!(phys.fiscal_year_start.is_some());
+                        assert_eq!(phys.fiscal_year_start.as_ref().unwrap().value, Month::July);
+
+                        // No week_start
+                        assert!(phys.week_start.is_none());
+                    }
+                    _ => panic!("Expected Physical calendar"),
+                }
+            }
+            _ => panic!("Expected Calendar item"),
+        }
+    }
+
+    #[test]
+    fn test_parse_physical_calendar_minimal() {
+        let input = r#"
+            calendar dates "dim_date" {
+                day = date_key;
+            }
+        "#;
+        let model = parse_str(input);
+
+        assert_eq!(model.items.len(), 1);
+        match &model.items[0].value {
+            Item::Calendar(cal) => {
+                assert_eq!(cal.name.value, "dates");
+
+                match &cal.body.value {
+                    CalendarBody::Physical(phys) => {
+                        assert_eq!(phys.source.value, "dim_date");
+                        assert_eq!(phys.grain_mappings.len(), 1);
+                        assert_eq!(phys.grain_mappings[0].value.level.value, GrainLevel::Day);
+                        assert_eq!(phys.grain_mappings[0].value.column.value, "date_key");
+                        assert!(phys.drill_paths.is_empty());
+                        assert!(phys.fiscal_year_start.is_none());
+                        assert!(phys.week_start.is_none());
+                    }
+                    _ => panic!("Expected Physical calendar"),
+                }
+            }
+            _ => panic!("Expected Calendar item"),
+        }
+    }
+
+    // ==========================================================================
+    // Dimension parsing tests
+    // ==========================================================================
+
+    #[test]
+    fn test_parse_dimension() {
+        let input = r#"
+            dimension customers {
+                source "dbo.dim_customers";
+                key customer_id;
+                attributes {
+                    customer_name string;
+                    segment string;
+                    region string;
+                }
+                drill_path geo { region };
+            }
+        "#;
+        let model = parse_str(input);
+
+        assert_eq!(model.items.len(), 1);
+        match &model.items[0].value {
+            Item::Dimension(dim) => {
+                assert_eq!(dim.name.value, "customers");
+                assert_eq!(dim.source.value, "dbo.dim_customers");
+                assert_eq!(dim.key.value, "customer_id");
+
+                // Check attributes
+                assert_eq!(dim.attributes.len(), 3);
+                assert_eq!(dim.attributes[0].value.name.value, "customer_name");
+                assert_eq!(dim.attributes[0].value.data_type.value, DataType::String);
+                assert_eq!(dim.attributes[1].value.name.value, "segment");
+                assert_eq!(dim.attributes[1].value.data_type.value, DataType::String);
+                assert_eq!(dim.attributes[2].value.name.value, "region");
+                assert_eq!(dim.attributes[2].value.data_type.value, DataType::String);
+
+                // Check drill_path
+                assert_eq!(dim.drill_paths.len(), 1);
+                let dp = &dim.drill_paths[0].value;
+                assert_eq!(dp.name.value, "geo");
+                assert_eq!(dp.levels.len(), 1);
+                assert_eq!(dp.levels[0].value, "region");
+            }
+            _ => panic!("Expected Dimension item"),
+        }
+    }
+
+    #[test]
+    fn test_parse_dimension_minimal() {
+        let input = r#"
+            dimension products {
+                source "dim_products";
+                key product_id;
+            }
+        "#;
+        let model = parse_str(input);
+
+        assert_eq!(model.items.len(), 1);
+        match &model.items[0].value {
+            Item::Dimension(dim) => {
+                assert_eq!(dim.name.value, "products");
+                assert_eq!(dim.source.value, "dim_products");
+                assert_eq!(dim.key.value, "product_id");
+                assert!(dim.attributes.is_empty());
+                assert!(dim.drill_paths.is_empty());
+            }
+            _ => panic!("Expected Dimension item"),
+        }
+    }
+
+    #[test]
+    fn test_parse_dimension_with_multiple_types() {
+        let input = r#"
+            dimension orders {
+                source "dim_orders";
+                key order_id;
+                attributes {
+                    order_date date;
+                    is_priority bool;
+                    order_count int;
+                    total_amount decimal;
+                }
+            }
+        "#;
+        let model = parse_str(input);
+
+        assert_eq!(model.items.len(), 1);
+        match &model.items[0].value {
+            Item::Dimension(dim) => {
+                assert_eq!(dim.attributes.len(), 4);
+                assert_eq!(dim.attributes[0].value.data_type.value, DataType::Date);
+                assert_eq!(dim.attributes[1].value.data_type.value, DataType::Bool);
+                assert_eq!(dim.attributes[2].value.data_type.value, DataType::Int);
+                assert_eq!(dim.attributes[3].value.data_type.value, DataType::Decimal);
+            }
+            _ => panic!("Expected Dimension item"),
+        }
+    }
+
+    // ==========================================================================
+    // Mixed item tests
+    // ==========================================================================
+
+    #[test]
+    fn test_parse_mixed_items() {
+        let input = r#"
+            calendar dates {
+                generate day+;
+            }
+
+            dimension customers {
+                source "dim_customers";
+                key customer_id;
+            }
+
+            table sales {
+                source "fact_sales";
+                atoms {
+                    amount decimal;
+                }
+            }
+        "#;
+        let model = parse_str(input);
+
+        assert_eq!(model.items.len(), 3);
+
+        match &model.items[0].value {
+            Item::Calendar(cal) => assert_eq!(cal.name.value, "dates"),
+            _ => panic!("Expected Calendar"),
+        }
+        match &model.items[1].value {
+            Item::Dimension(dim) => assert_eq!(dim.name.value, "customers"),
+            _ => panic!("Expected Dimension"),
+        }
+        match &model.items[2].value {
+            Item::Table(t) => assert_eq!(t.name.value, "sales"),
+            _ => panic!("Expected Table"),
+        }
+    }
+
+    #[test]
+    fn test_parse_calendar_with_explicit_range() {
+        let input = r#"
+            calendar dates {
+                generate month+;
+                range 2024-01-01 to 2024-12-31;
+            }
+        "#;
+        let model = parse_str(input);
+
+        assert_eq!(model.items.len(), 1);
+        match &model.items[0].value {
+            Item::Calendar(cal) => {
+                match &cal.body.value {
+                    CalendarBody::Generated(gen) => {
+                        assert_eq!(gen.base_grain.value, GrainLevel::Month);
+                        match &gen.range.as_ref().unwrap().value {
+                            CalendarRange::Explicit { start, end } => {
+                                assert_eq!(start.value.year, 2024);
+                                assert_eq!(start.value.month, 1);
+                                assert_eq!(start.value.day, 1);
+                                assert_eq!(end.value.year, 2024);
+                                assert_eq!(end.value.month, 12);
+                                assert_eq!(end.value.day, 31);
+                            }
+                            _ => panic!("Expected Explicit range"),
+                        }
+                    }
+                    _ => panic!("Expected Generated calendar"),
+                }
+            }
+            _ => panic!("Expected Calendar item"),
+        }
+    }
+
+    #[test]
+    fn test_parse_calendar_weekdays() {
+        // Test all weekday values
+        for (weekday_str, expected) in [
+            ("Monday", Weekday::Monday),
+            ("Tuesday", Weekday::Tuesday),
+            ("Wednesday", Weekday::Wednesday),
+            ("Thursday", Weekday::Thursday),
+            ("Friday", Weekday::Friday),
+            ("Saturday", Weekday::Saturday),
+            ("Sunday", Weekday::Sunday),
+        ] {
+            let input = format!(
+                r#"
+                calendar dates {{
+                    generate day+;
+                    week_start {};
+                }}
+            "#,
+                weekday_str
+            );
+            let model = parse_str(&input);
+
+            match &model.items[0].value {
+                Item::Calendar(cal) => match &cal.body.value {
+                    CalendarBody::Generated(gen) => {
+                        assert_eq!(gen.week_start.as_ref().unwrap().value, expected);
+                    }
+                    _ => panic!("Expected Generated calendar"),
+                },
+                _ => panic!("Expected Calendar item"),
+            }
+        }
+    }
+
+    #[test]
+    fn test_parse_physical_calendar_months() {
+        // Test a few month values
+        for (month_str, expected) in [
+            ("January", Month::January),
+            ("July", Month::July),
+            ("December", Month::December),
+        ] {
+            let input = format!(
+                r#"
+                calendar fiscal "dim_date" {{
+                    day = date_key;
+                    fiscal_year_start {};
+                }}
+            "#,
+                month_str
+            );
+            let model = parse_str(&input);
+
+            match &model.items[0].value {
+                Item::Calendar(cal) => match &cal.body.value {
+                    CalendarBody::Physical(phys) => {
+                        assert_eq!(phys.fiscal_year_start.as_ref().unwrap().value, expected);
+                    }
+                    _ => panic!("Expected Physical calendar"),
+                },
+                _ => panic!("Expected Calendar item"),
+            }
         }
     }
 }
