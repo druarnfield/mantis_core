@@ -171,3 +171,86 @@ fn test_translate_drill_path_to_field_ref() {
     assert_eq!(query.group_by[0].entity, "dates");
     assert_eq!(query.group_by[0].field, "month_start_date");
 }
+
+#[test]
+fn test_translate_simple_measure() {
+    use mantis::dsl::span::Span;
+    use mantis::model::{Atom, AtomType, Measure, MeasureBlock, ShowItem, SqlExpr, Table};
+
+    let mut tables = HashMap::new();
+    let mut atoms = HashMap::new();
+    atoms.insert(
+        "revenue".to_string(),
+        Atom {
+            name: "revenue".to_string(),
+            data_type: AtomType::Decimal,
+        },
+    );
+
+    tables.insert(
+        "fact_sales".to_string(),
+        Table {
+            name: "fact_sales".to_string(),
+            source: "dbo.fact_sales".to_string(),
+            atoms,
+            times: HashMap::new(),
+            slicers: HashMap::new(),
+        },
+    );
+
+    let mut measures = HashMap::new();
+    let mut measure_map = HashMap::new();
+    measure_map.insert(
+        "total_revenue".to_string(),
+        Measure {
+            name: "total_revenue".to_string(),
+            expr: SqlExpr {
+                sql: "sum(@revenue)".to_string(),
+                span: Span::default(),
+            },
+            filter: None,
+            null_handling: None,
+        },
+    );
+
+    measures.insert(
+        "fact_sales".to_string(),
+        MeasureBlock {
+            table_name: "fact_sales".to_string(),
+            measures: measure_map,
+        },
+    );
+
+    let model = Model {
+        defaults: None,
+        calendars: HashMap::new(),
+        dimensions: HashMap::new(),
+        tables,
+        measures,
+        reports: HashMap::new(),
+    };
+
+    let report = Report {
+        name: "test_report".to_string(),
+        from: vec!["fact_sales".to_string()],
+        use_date: vec![],
+        period: None,
+        group: vec![],
+        show: vec![ShowItem::Measure {
+            name: "total_revenue".to_string(),
+            label: Some("Total Revenue".to_string()),
+        }],
+        filters: vec![],
+        sort: vec![],
+        limit: None,
+    };
+
+    let result = translation::translate_report(&report, &model);
+    assert!(result.is_ok());
+
+    let query = result.unwrap();
+    assert_eq!(query.select.len(), 1);
+    assert_eq!(query.select[0].field.entity, "fact_sales");
+    assert_eq!(query.select[0].field.field, "total_revenue");
+    assert_eq!(query.select[0].alias, Some("Total Revenue".to_string()));
+}

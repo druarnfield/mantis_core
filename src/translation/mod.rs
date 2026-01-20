@@ -1,7 +1,7 @@
 //! Translation of Report model types to SemanticQuery.
 
 use crate::model::{Model, Report};
-use crate::semantic::planner::types::SemanticQuery;
+use crate::semantic::planner::types::{SelectField, SemanticQuery};
 
 /// Translation error.
 #[derive(Debug, Clone)]
@@ -128,6 +128,42 @@ fn resolve_drill_path_reference(
     ))
 }
 
+/// Translate a simple measure reference to a SelectField.
+///
+/// A simple measure is a direct reference to a measure defined in the model,
+/// without any time intelligence suffixes or inline expressions.
+fn translate_simple_measure(
+    measure_name: &str,
+    label: Option<String>,
+    from_table: &str,
+    model: &Model,
+) -> Result<SelectField, TranslationError> {
+    // Find the measure in the model
+    let measure_block =
+        model
+            .measures
+            .get(from_table)
+            .ok_or_else(|| TranslationError::UndefinedReference {
+                entity_type: "measure block".to_string(),
+                name: from_table.to_string(),
+            })?;
+
+    let _measure = measure_block.measures.get(measure_name).ok_or_else(|| {
+        TranslationError::InvalidMeasure {
+            measure: measure_name.to_string(),
+            table: from_table.to_string(),
+        }
+    })?;
+
+    // Create SelectField
+    let mut select_field = SelectField::new(from_table, measure_name);
+    if let Some(label) = label {
+        select_field = select_field.with_alias(&label);
+    }
+
+    Ok(select_field)
+}
+
 /// Translate a Report to a SemanticQuery.
 pub fn translate_report(report: &Report, model: &Model) -> Result<SemanticQuery, TranslationError> {
     let mut query = SemanticQuery::default();
@@ -149,7 +185,8 @@ pub fn translate_report(report: &Report, model: &Model) -> Result<SemanticQuery,
         });
     }
 
-    query.from = Some(report.from[0].clone());
+    let from_table = &report.from[0];
+    query.from = Some(from_table.clone());
 
     // Translate group items
     for group_item in &report.group {
@@ -169,7 +206,24 @@ pub fn translate_report(report: &Report, model: &Model) -> Result<SemanticQuery,
         }
     }
 
-    // TODO: Translate show, filters, sort, limit
+    // Translate show items
+    for show_item in &report.show {
+        match show_item {
+            crate::model::ShowItem::Measure { name, label } => {
+                let select_field =
+                    translate_simple_measure(name, label.clone(), from_table, model)?;
+                query.select.push(select_field);
+            }
+            crate::model::ShowItem::MeasureWithSuffix { .. } => {
+                // TODO: Handle time suffixes
+            }
+            crate::model::ShowItem::InlineMeasure { .. } => {
+                // TODO: Handle inline measures
+            }
+        }
+    }
+
+    // TODO: Translate filters, sort, limit
 
     Ok(query)
 }
