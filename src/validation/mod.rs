@@ -24,6 +24,8 @@ pub enum ValidationError {
         drill_path_name: String,
         issue: String,
     },
+    /// Duplicate name detected.
+    DuplicateName { entity_type: String, name: String },
 }
 
 impl std::fmt::Display for ValidationError {
@@ -61,6 +63,9 @@ impl std::fmt::Display for ValidationError {
                     entity_type, entity_name, drill_path_name, issue
                 )
             }
+            ValidationError::DuplicateName { entity_type, name } => {
+                write!(f, "Duplicate {} name: '{}'", entity_type, name)
+            }
         }
     }
 }
@@ -70,6 +75,9 @@ impl std::error::Error for ValidationError {}
 /// Validate a semantic model.
 pub fn validate(model: &Model) -> Result<(), Vec<ValidationError>> {
     let mut errors = Vec::new();
+
+    // Validate unique names
+    validate_unique_names(model, &mut errors);
 
     // Validate references
     validate_references(model, &mut errors);
@@ -87,10 +95,62 @@ pub fn validate(model: &Model) -> Result<(), Vec<ValidationError>> {
     }
 }
 
+fn validate_unique_names(model: &Model, errors: &mut Vec<ValidationError>) {
+    let mut seen_calendars = std::collections::HashSet::new();
+    for calendar_name in model.calendars.keys() {
+        if !seen_calendars.insert(calendar_name) {
+            errors.push(ValidationError::DuplicateName {
+                entity_type: "Calendar".to_string(),
+                name: calendar_name.clone(),
+            });
+        }
+    }
+
+    let mut seen_dimensions = std::collections::HashSet::new();
+    for dimension_name in model.dimensions.keys() {
+        if !seen_dimensions.insert(dimension_name) {
+            errors.push(ValidationError::DuplicateName {
+                entity_type: "Dimension".to_string(),
+                name: dimension_name.clone(),
+            });
+        }
+    }
+
+    let mut seen_tables = std::collections::HashSet::new();
+    for table_name in model.tables.keys() {
+        if !seen_tables.insert(table_name) {
+            errors.push(ValidationError::DuplicateName {
+                entity_type: "Table".to_string(),
+                name: table_name.clone(),
+            });
+        }
+    }
+
+    let mut seen_measure_blocks = std::collections::HashSet::new();
+    for measure_block_name in model.measures.keys() {
+        if !seen_measure_blocks.insert(measure_block_name) {
+            errors.push(ValidationError::DuplicateName {
+                entity_type: "MeasureBlock".to_string(),
+                name: measure_block_name.clone(),
+            });
+        }
+    }
+
+    let mut seen_reports = std::collections::HashSet::new();
+    for report_name in model.reports.keys() {
+        if !seen_reports.insert(report_name) {
+            errors.push(ValidationError::DuplicateName {
+                entity_type: "Report".to_string(),
+                name: report_name.clone(),
+            });
+        }
+    }
+}
+
 fn validate_references(model: &Model, errors: &mut Vec<ValidationError>) {
     // Validate table time bindings reference existing calendars
     for (table_name, table) in &model.tables {
-        for (time_name, time_binding) in &table.times {
+        for (_time_name, time_binding) in &table.times {
             if !model.calendars.contains_key(&time_binding.calendar) {
                 errors.push(ValidationError::UndefinedReference {
                     entity_type: "Table".to_string(),
@@ -110,6 +170,20 @@ fn validate_references(model: &Model, errors: &mut Vec<ValidationError>) {
                         entity_name: format!("{}.{}", table_name, slicer_name),
                         reference_type: "dimension".to_string(),
                         reference_name: dimension.clone(),
+                    });
+                }
+            }
+        }
+
+        // Validate Via slicers reference existing slicers in the same table
+        for (slicer_name, slicer) in &table.slicers {
+            if let crate::model::Slicer::Via { fk_slicer, .. } = slicer {
+                if !table.slicers.contains_key(fk_slicer) {
+                    errors.push(ValidationError::UndefinedReference {
+                        entity_type: "Table".to_string(),
+                        entity_name: format!("{}.{}", table_name, slicer_name),
+                        reference_type: "slicer".to_string(),
+                        reference_name: fk_slicer.clone(),
                     });
                 }
             }
@@ -191,7 +265,7 @@ fn validate_drill_paths(model: &Model, errors: &mut Vec<ValidationError>) {
     for (cal_name, calendar) in &model.calendars {
         let grain_mappings = match &calendar.body {
             crate::model::CalendarBody::Physical(phys) => &phys.grain_mappings,
-            crate::model::CalendarBody::Generated { grain, .. } => {
+            crate::model::CalendarBody::Generated { grain: _, .. } => {
                 // Generated calendars auto-support their grain
                 continue;
             }

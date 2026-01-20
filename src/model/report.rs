@@ -101,6 +101,59 @@ pub enum SortDirection {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum PeriodExpr {
-    // Placeholder - will implement later
-    LastNMonths(u32),
+    /// Relative period (e.g., today, this_month, last_12_months).
+    Relative(RelativePeriod),
+    /// Explicit date range: `range(2024-01-01, 2024-12-31)`.
+    Range { start: String, end: String },
+    /// Specific month: `month(2024-03)`.
+    Month { year: u16, month: u8 },
+    /// Specific quarter: `quarter(2024-Q2)`.
+    Quarter { year: u16, quarter: u8 },
+    /// Specific year: `year(2024)`.
+    Year { year: u16 },
+}
+
+/// Relative period expressions.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RelativePeriod {
+    // Single day
+    Today,
+    Yesterday,
+
+    // Current periods
+    ThisWeek,
+    ThisMonth,
+    ThisQuarter,
+    ThisYear,
+
+    // Previous complete periods
+    LastWeek,
+    LastMonth,
+    LastQuarter,
+    LastYear,
+
+    // Period-to-date
+    Ytd,
+    Qtd,
+    Mtd,
+
+    // Fiscal periods
+    ThisFiscalYear,
+    LastFiscalYear,
+    ThisFiscalQuarter,
+    LastFiscalQuarter,
+    FiscalYtd,
+
+    // Trailing periods: last_N_<unit>
+    Trailing { count: u32, unit: PeriodUnit },
+}
+
+/// Unit for trailing periods.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PeriodUnit {
+    Days,
+    Weeks,
+    Months,
+    Quarters,
+    Years,
 }

@@ -95,15 +95,19 @@ fn lower_calendar(calendar: ast::Calendar) -> Result<model::Calendar, LoweringEr
             for drill_path in phys.drill_paths {
                 let path_name = drill_path.value.name.value.clone();
                 // Drill paths contain GrainLevel enums, not strings - need to convert
-                let levels: Vec<model::types::GrainLevel> = drill_path
-                    .value
-                    .levels
-                    .into_iter()
-                    .filter_map(|level_str| {
-                        // Parse string level names to GrainLevel enums
-                        ast::GrainLevel::from_str(&level_str.value)
-                    })
-                    .collect();
+                let mut levels = Vec::new();
+                for level_str in drill_path.value.levels {
+                    match ast::GrainLevel::from_str(&level_str.value) {
+                        Some(grain_level) => levels.push(grain_level),
+                        None => {
+                            return Err(LoweringError::InvalidGrainLevel {
+                                calendar_name: name.clone(),
+                                drill_path_name: path_name.clone(),
+                                invalid_level: level_str.value,
+                            });
+                        }
+                    }
+                }
 
                 drill_paths.insert(
                     path_name.clone(),
@@ -311,11 +315,11 @@ fn lower_report(report: ast::Report) -> Result<model::Report, LoweringError> {
     let from: Vec<String> = report.from.into_iter().map(|s| s.value).collect();
     let use_date: Vec<String> = report.use_date.into_iter().map(|s| s.value).collect();
 
-    // Convert period (placeholder)
-    let period = report.period.map(|_p| {
-        // For now, just use a simple placeholder
-        model::report::PeriodExpr::LastNMonths(12)
-    });
+    // Convert period
+    let period = report
+        .period
+        .map(|p| lower_period_expr(p.value))
+        .transpose()?;
 
     // Convert group items
     let mut group = Vec::new();
@@ -425,15 +429,85 @@ fn lower_time_suffix(suffix: ast::TimeSuffix) -> model::TimeSuffix {
     }
 }
 
+fn lower_period_expr(period: ast::PeriodExpr) -> Result<model::report::PeriodExpr, LoweringError> {
+    match period {
+        ast::PeriodExpr::Relative(rel) => Ok(model::report::PeriodExpr::Relative(
+            lower_relative_period(rel),
+        )),
+        ast::PeriodExpr::Range { start, end } => Ok(model::report::PeriodExpr::Range {
+            start: start.to_string(),
+            end: end.to_string(),
+        }),
+        ast::PeriodExpr::Month { year, month } => {
+            Ok(model::report::PeriodExpr::Month { year, month })
+        }
+        ast::PeriodExpr::Quarter { year, quarter } => {
+            Ok(model::report::PeriodExpr::Quarter { year, quarter })
+        }
+        ast::PeriodExpr::Year { year } => Ok(model::report::PeriodExpr::Year { year }),
+    }
+}
+
+fn lower_relative_period(rel: ast::RelativePeriod) -> model::report::RelativePeriod {
+    match rel {
+        ast::RelativePeriod::Today => model::report::RelativePeriod::Today,
+        ast::RelativePeriod::Yesterday => model::report::RelativePeriod::Yesterday,
+        ast::RelativePeriod::ThisWeek => model::report::RelativePeriod::ThisWeek,
+        ast::RelativePeriod::ThisMonth => model::report::RelativePeriod::ThisMonth,
+        ast::RelativePeriod::ThisQuarter => model::report::RelativePeriod::ThisQuarter,
+        ast::RelativePeriod::ThisYear => model::report::RelativePeriod::ThisYear,
+        ast::RelativePeriod::LastWeek => model::report::RelativePeriod::LastWeek,
+        ast::RelativePeriod::LastMonth => model::report::RelativePeriod::LastMonth,
+        ast::RelativePeriod::LastQuarter => model::report::RelativePeriod::LastQuarter,
+        ast::RelativePeriod::LastYear => model::report::RelativePeriod::LastYear,
+        ast::RelativePeriod::Ytd => model::report::RelativePeriod::Ytd,
+        ast::RelativePeriod::Qtd => model::report::RelativePeriod::Qtd,
+        ast::RelativePeriod::Mtd => model::report::RelativePeriod::Mtd,
+        ast::RelativePeriod::ThisFiscalYear => model::report::RelativePeriod::ThisFiscalYear,
+        ast::RelativePeriod::LastFiscalYear => model::report::RelativePeriod::LastFiscalYear,
+        ast::RelativePeriod::ThisFiscalQuarter => model::report::RelativePeriod::ThisFiscalQuarter,
+        ast::RelativePeriod::LastFiscalQuarter => model::report::RelativePeriod::LastFiscalQuarter,
+        ast::RelativePeriod::FiscalYtd => model::report::RelativePeriod::FiscalYtd,
+        ast::RelativePeriod::Trailing { count, unit } => model::report::RelativePeriod::Trailing {
+            count,
+            unit: lower_period_unit(unit),
+        },
+    }
+}
+
+fn lower_period_unit(unit: ast::PeriodUnit) -> model::report::PeriodUnit {
+    match unit {
+        ast::PeriodUnit::Days => model::report::PeriodUnit::Days,
+        ast::PeriodUnit::Weeks => model::report::PeriodUnit::Weeks,
+        ast::PeriodUnit::Months => model::report::PeriodUnit::Months,
+        ast::PeriodUnit::Quarters => model::report::PeriodUnit::Quarters,
+        ast::PeriodUnit::Years => model::report::PeriodUnit::Years,
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum LoweringError {
     NotImplemented(String),
+    InvalidGrainLevel {
+        calendar_name: String,
+        drill_path_name: String,
+        invalid_level: String,
+    },
 }
 
 impl std::fmt::Display for LoweringError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             LoweringError::NotImplemented(msg) => write!(f, "Not implemented: {}", msg),
+            LoweringError::InvalidGrainLevel {
+                calendar_name,
+                drill_path_name,
+                invalid_level,
+            } => write!(
+                f,
+                "Invalid grain level '{}' in drill path '{}' of calendar '{}'",
+                invalid_level, drill_path_name, calendar_name
+            ),
         }
     }
 }
