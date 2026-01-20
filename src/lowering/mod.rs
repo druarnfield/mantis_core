@@ -58,35 +58,29 @@ fn lower_defaults(_defaults: Spanned<ast::Defaults>) -> Result<model::Defaults, 
 
 fn lower_calendar(_calendar: ast::Calendar) -> Result<model::Calendar, LoweringError> {
     // Placeholder
-    Err(LoweringError::NotImplemented(
-        "calendar lowering".to_string(),
-    ))
+    Err(LoweringError::NotImplemented("Calendar".to_string()))
 }
 
 fn lower_dimension(_dimension: ast::Dimension) -> Result<model::Dimension, LoweringError> {
     // Placeholder
-    Err(LoweringError::NotImplemented(
-        "dimension lowering".to_string(),
-    ))
+    Err(LoweringError::NotImplemented("Dimension".to_string()))
 }
 
 fn lower_table(_table: ast::Table) -> Result<model::Table, LoweringError> {
     // Placeholder
-    Err(LoweringError::NotImplemented("table lowering".to_string()))
+    Err(LoweringError::NotImplemented("Table".to_string()))
 }
 
 fn lower_measure_block(
     _measure_block: ast::MeasureBlock,
 ) -> Result<model::MeasureBlock, LoweringError> {
     // Placeholder
-    Err(LoweringError::NotImplemented(
-        "measure_block lowering".to_string(),
-    ))
+    Err(LoweringError::NotImplemented("MeasureBlock".to_string()))
 }
 
 fn lower_report(_report: ast::Report) -> Result<model::Report, LoweringError> {
     // Placeholder
-    Err(LoweringError::NotImplemented("report lowering".to_string()))
+    Err(LoweringError::NotImplemented("Report".to_string()))
 }
 
 #[derive(Debug, Clone)]

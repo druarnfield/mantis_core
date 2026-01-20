@@ -16,6 +16,9 @@ fn test_lower_empty_model() {
     assert!(result.is_ok());
 
     let model = result.unwrap();
+    assert!(model.defaults.is_none());
+    assert!(model.dimensions.is_empty());
+    assert!(model.reports.is_empty());
     assert!(model.calendars.is_empty());
     assert!(model.tables.is_empty());
     assert!(model.measures.is_empty());
