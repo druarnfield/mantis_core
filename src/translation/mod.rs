@@ -52,10 +52,24 @@ pub fn translate_report(
 ) -> Result<SemanticQuery, TranslationError> {
     let mut query = SemanticQuery::default();
 
-    // Set from clause
-    if !report.from.is_empty() {
-        query.from = Some(report.from[0].clone());
+    // Validate and set from clause
+    if report.from.is_empty() {
+        return Err(TranslationError::UndefinedReference {
+            entity_type: "table".to_string(),
+            name: "(none specified)".to_string(),
+        });
     }
+
+    if report.from.len() > 1 {
+        // For now, only single-table queries supported
+        // Multi-table support will be added in future tasks
+        return Err(TranslationError::UndefinedReference {
+            entity_type: "multi-table query".to_string(),
+            name: format!("got {} tables, expected 1", report.from.len()),
+        });
+    }
+
+    query.from = Some(report.from[0].clone());
 
     // TODO: Translate group, show, filters, sort, limit
 
