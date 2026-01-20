@@ -117,6 +117,41 @@ where
         Token::ErrorOnZero => NullHandling::ErrorOnZero,
     }.labelled("null handling mode");
 
+    // ==========================================================================
+    // SQL expression parser (reusable)
+    // ==========================================================================
+
+    // Parse any token that's not RBrace, then reconstruct the SQL string from tokens
+    let sql_token = any()
+        .filter(|t: &Token| !matches!(t, Token::RBrace))
+        .map_with(|t: Token, e| (t.to_string(), to_span(e.span())));
+
+    // SQL expression parser: { sql_tokens }
+    // Parses tokens between braces and reconstructs SQL string
+    // Note: whitespace handling is basic - joins tokens with single space
+    // This is sufficient for SQL expressions but doesn't handle all edge cases
+    let sql_expr = just(Token::LBrace)
+        .map_with(|_, e| to_span(e.span()))
+        .then(
+            sql_token.clone()
+                .repeated()
+                .collect::<Vec<_>>()
+        )
+        .then(
+            just(Token::RBrace)
+                .map_with(|_, e| to_span(e.span()))
+        )
+        .map(|((lbrace_span, tokens), rbrace_span)| {
+            // Reconstruct SQL from tokens, joining with spaces
+            let sql = tokens.iter()
+                .map(|(s, _)| s.as_str())
+                .collect::<Vec<_>>()
+                .join(" ");
+            // Span covers from LBrace start to RBrace end
+            let span = lbrace_span.start..rbrace_span.end;
+            SqlExpr::new(sql, span)
+        });
+
     // Parse a date literal from a Number token (YYYY-MM-DD format)
     // The lexer produces numbers like "2024" or "2024.01" but dates are YYYY-MM-DD
     // We need to parse sequences: Number("-")Number("-")Number
@@ -304,11 +339,6 @@ where
         });
 
     // Calculated slicer: name type = { sql_expr };
-    // Parse any token that's not RBrace, then reconstruct the SQL string from tokens
-    let sql_token = any()
-        .filter(|t: &Token| !matches!(t, Token::RBrace))
-        .map_with(|t: Token, e| (t.to_string(), to_span(e.span())));
-
     let slicer_calculated = ident.clone()
         .map_with(|n, e| Spanned::new(n, to_span(e.span())))
         .then(
@@ -316,29 +346,7 @@ where
                 .map_with(|t, e| Spanned::new(t, to_span(e.span())))
         )
         .then_ignore(just(Token::Eq))
-        .then(
-            just(Token::LBrace)
-                .map_with(|_, e| to_span(e.span()))
-                .then(
-                    sql_token
-                        .repeated()
-                        .collect::<Vec<_>>()
-                )
-                .then(
-                    just(Token::RBrace)
-                        .map_with(|_, e| to_span(e.span()))
-                )
-                .map(|((lbrace_span, tokens), rbrace_span)| {
-                    // Reconstruct SQL from tokens
-                    let sql = tokens.iter()
-                        .map(|(s, _)| s.as_str())
-                        .collect::<Vec<_>>()
-                        .join(" ");
-                    // Span covers from LBrace start to RBrace end
-                    let span = lbrace_span.start..rbrace_span.end;
-                    SqlExpr::new(sql, span)
-                })
-        )
+        .then(sql_expr.clone())
         .then_ignore(just(Token::Semicolon))
         .map_with(|((name, data_type_spanned), expr), e| {
             let kind = SlicerKind::Calculated {
@@ -849,29 +857,6 @@ where
     // ==========================================================================
     // Measures block
     // ==========================================================================
-
-    // SQL expression parser (reuse from slicers)
-    let sql_expr = just(Token::LBrace)
-        .map_with(|_, e| to_span(e.span()))
-        .then(
-            sql_token.clone()
-                .repeated()
-                .collect::<Vec<_>>()
-        )
-        .then(
-            just(Token::RBrace)
-                .map_with(|_, e| to_span(e.span()))
-        )
-        .map(|((lbrace_span, tokens), rbrace_span)| {
-            // Reconstruct SQL from tokens
-            let sql = tokens.iter()
-                .map(|(s, _)| s.as_str())
-                .collect::<Vec<_>>()
-                .join(" ");
-            // Span covers from LBrace start to RBrace end
-            let span = lbrace_span.start..rbrace_span.end;
-            SqlExpr::new(sql, span)
-        });
 
     // Measure: name = { expr } [where { cond }] [null mode];
     let measure = ident.clone()
@@ -1986,6 +1971,58 @@ mod tests {
                 }
                 _ => panic!("Expected NullHandling setting"),
             }
+        }
+    }
+
+    #[test]
+    fn test_sql_expr_whitespace_handling() {
+        // Test that the SQL expression parser correctly reconstructs SQL from tokens
+        // Note: whitespace handling is basic - joins tokens with single space
+        let input = r#"
+            table test {
+                source "test";
+                slicers {
+                    calc1 string = { UPPER(SUBSTRING(region, 1, 2)) };
+                }
+            }
+            measures test {
+                total = { sum(@revenue) };
+                ratio = { numerator / denominator };
+            }
+        "#;
+        let model = parse_str(input);
+
+        // Check calculated slicer SQL
+        match &model.items[0].value {
+            Item::Table(table) => {
+                match &table.slicers[0].value.kind.value {
+                    SlicerKind::Calculated { expr, .. } => {
+                        // Verify SQL contains expected tokens
+                        assert!(expr.sql.contains("UPPER"));
+                        assert!(expr.sql.contains("SUBSTRING"));
+                        assert!(expr.sql.contains("region"));
+                    }
+                    _ => panic!("Expected Calculated slicer"),
+                }
+            }
+            _ => panic!("Expected Table item"),
+        }
+
+        // Check measure SQL
+        match &model.items[1].value {
+            Item::MeasureBlock(mb) => {
+                // First measure: sum(@revenue)
+                let m1 = &mb.measures[0].value;
+                assert!(m1.expr.value.sql.contains("sum"));
+                assert!(m1.expr.value.sql.contains("@"));
+                assert!(m1.expr.value.sql.contains("revenue"));
+
+                // Second measure: numerator / denominator
+                let m2 = &mb.measures[1].value;
+                assert!(m2.expr.value.sql.contains("numerator"));
+                assert!(m2.expr.value.sql.contains("denominator"));
+            }
+            _ => panic!("Expected MeasureBlock"),
         }
     }
 }
