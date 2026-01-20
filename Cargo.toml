@@ -117,3 +117,7 @@ path = "tests/lowering/report_lowering_test.rs"
 [[test]]
 name = "defaults_lowering_test"
 path = "tests/lowering/defaults_lowering_test.rs"
+
+[[test]]
+name = "validation_test"
+path = "tests/validation/validation_test.rs"

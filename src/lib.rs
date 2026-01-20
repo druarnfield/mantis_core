@@ -51,6 +51,7 @@ pub mod metadata;
 pub mod model;
 pub mod semantic;
 pub mod sql;
+pub mod validation;
 pub mod worker;
 
 // Re-export SQL submodules at crate level for backwards compatibility
