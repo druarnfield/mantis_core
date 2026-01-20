@@ -343,3 +343,114 @@ fn test_translate_measure_with_ytd_suffix() {
     assert_eq!(query.derived.len(), 1);
     assert_eq!(query.derived[0].alias, "YTD Revenue");
 }
+
+#[test]
+fn test_translate_all_time_suffixes() {
+    use mantis::dsl::span::Span;
+    use mantis::model::{
+        Atom, AtomType, Measure, MeasureBlock, Model, Report, ShowItem, SqlExpr, Table, TimeSuffix,
+    };
+
+    // Setup model with measure (same as previous test)
+    let mut tables = HashMap::new();
+    let mut atoms = HashMap::new();
+    atoms.insert(
+        "revenue".to_string(),
+        Atom {
+            name: "revenue".to_string(),
+            data_type: AtomType::Decimal,
+        },
+    );
+
+    tables.insert(
+        "fact_sales".to_string(),
+        Table {
+            name: "fact_sales".to_string(),
+            source: "dbo.fact_sales".to_string(),
+            atoms,
+            times: HashMap::new(),
+            slicers: HashMap::new(),
+        },
+    );
+
+    let mut measures = HashMap::new();
+    let mut measure_map = HashMap::new();
+    measure_map.insert(
+        "revenue".to_string(),
+        Measure {
+            name: "revenue".to_string(),
+            expr: SqlExpr {
+                sql: "sum(@revenue)".to_string(),
+                span: Span::default(),
+            },
+            filter: None,
+            null_handling: None,
+        },
+    );
+
+    measures.insert(
+        "fact_sales".to_string(),
+        MeasureBlock {
+            table_name: "fact_sales".to_string(),
+            measures: measure_map,
+        },
+    );
+
+    let model = Model {
+        defaults: None,
+        calendars: HashMap::new(),
+        dimensions: HashMap::new(),
+        tables,
+        measures,
+        reports: HashMap::new(),
+    };
+
+    // Test each time suffix type
+    let test_suffixes = vec![
+        TimeSuffix::Ytd,
+        TimeSuffix::Qtd,
+        TimeSuffix::Mtd,
+        TimeSuffix::Wtd,
+        TimeSuffix::FiscalYtd,
+        TimeSuffix::FiscalQtd,
+        TimeSuffix::PriorYear,
+        TimeSuffix::PriorQuarter,
+        TimeSuffix::PriorMonth,
+        TimeSuffix::PriorWeek,
+        TimeSuffix::YoyGrowth,
+        TimeSuffix::QoqGrowth,
+        TimeSuffix::MomGrowth,
+        TimeSuffix::WowGrowth,
+        TimeSuffix::YoyDelta,
+        TimeSuffix::QoqDelta,
+        TimeSuffix::MomDelta,
+        TimeSuffix::WowDelta,
+        TimeSuffix::Rolling3m,
+        TimeSuffix::Rolling6m,
+        TimeSuffix::Rolling12m,
+        TimeSuffix::Rolling3mAvg,
+        TimeSuffix::Rolling6mAvg,
+        TimeSuffix::Rolling12mAvg,
+    ];
+
+    for suffix in test_suffixes {
+        let report = Report {
+            name: "test_report".to_string(),
+            from: vec!["fact_sales".to_string()],
+            use_date: vec![],
+            period: None,
+            group: vec![],
+            show: vec![ShowItem::MeasureWithSuffix {
+                name: "revenue".to_string(),
+                suffix,
+                label: None,
+            }],
+            filters: vec![],
+            sort: vec![],
+            limit: None,
+        };
+
+        let result = translation::translate_report(&report, &model);
+        assert!(result.is_ok(), "Failed to translate suffix: {:?}", suffix);
+    }
+}

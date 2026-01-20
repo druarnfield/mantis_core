@@ -204,17 +204,195 @@ fn translate_time_suffix(
     let derived_alias = label.unwrap_or_else(|| format!("{}_{:?}", measure_name, suffix));
 
     let derived_expr = match suffix {
+        // Accumulations
         crate::model::TimeSuffix::Ytd => DerivedExpr::TimeFunction(TimeFunction::YearToDate {
             measure: measure_name.to_string(),
             year_column: None,
             period_column: None,
             via: None,
         }),
-        _ => {
-            return Err(TranslationError::SqlCompilationError {
-                expression: format!("{}.{:?}", measure_name, suffix),
-                error: "Time suffix not yet implemented".to_string(),
-            });
+        crate::model::TimeSuffix::Qtd => DerivedExpr::TimeFunction(TimeFunction::QuarterToDate {
+            measure: measure_name.to_string(),
+            year_column: None,
+            quarter_column: None,
+            period_column: None,
+            via: None,
+        }),
+        crate::model::TimeSuffix::Mtd => DerivedExpr::TimeFunction(TimeFunction::MonthToDate {
+            measure: measure_name.to_string(),
+            year_column: None,
+            month_column: None,
+            day_column: None,
+            via: None,
+        }),
+        crate::model::TimeSuffix::Wtd => {
+            // WTD uses MonthToDate as a placeholder (could be refined with week-specific logic)
+            DerivedExpr::TimeFunction(TimeFunction::MonthToDate {
+                measure: measure_name.to_string(),
+                year_column: None,
+                month_column: None,
+                day_column: None,
+                via: None,
+            })
+        }
+        crate::model::TimeSuffix::FiscalYtd => {
+            DerivedExpr::TimeFunction(TimeFunction::YearToDate {
+                measure: measure_name.to_string(),
+                year_column: None,
+                period_column: None,
+                via: Some("fiscal".to_string()),
+            })
+        }
+        crate::model::TimeSuffix::FiscalQtd => {
+            DerivedExpr::TimeFunction(TimeFunction::QuarterToDate {
+                measure: measure_name.to_string(),
+                year_column: None,
+                quarter_column: None,
+                period_column: None,
+                via: Some("fiscal".to_string()),
+            })
+        }
+
+        // Prior periods
+        crate::model::TimeSuffix::PriorYear => DerivedExpr::TimeFunction(TimeFunction::PriorYear {
+            measure: measure_name.to_string(),
+            via: None,
+        }),
+        crate::model::TimeSuffix::PriorQuarter => {
+            DerivedExpr::TimeFunction(TimeFunction::PriorQuarter {
+                measure: measure_name.to_string(),
+                via: None,
+            })
+        }
+        crate::model::TimeSuffix::PriorMonth => {
+            DerivedExpr::TimeFunction(TimeFunction::PriorPeriod {
+                measure: measure_name.to_string(),
+                periods_back: 1,
+                via: None,
+            })
+        }
+        crate::model::TimeSuffix::PriorWeek => {
+            DerivedExpr::TimeFunction(TimeFunction::PriorPeriod {
+                measure: measure_name.to_string(),
+                periods_back: 1,
+                via: None,
+            })
+        }
+
+        // Growth calculations
+        crate::model::TimeSuffix::YoyGrowth => {
+            let current = Box::new(DerivedExpr::MeasureRef(measure_name.to_string()));
+            let previous = Box::new(DerivedExpr::TimeFunction(TimeFunction::PriorYear {
+                measure: measure_name.to_string(),
+                via: None,
+            }));
+            DerivedExpr::Growth { current, previous }
+        }
+        crate::model::TimeSuffix::QoqGrowth => {
+            let current = Box::new(DerivedExpr::MeasureRef(measure_name.to_string()));
+            let previous = Box::new(DerivedExpr::TimeFunction(TimeFunction::PriorQuarter {
+                measure: measure_name.to_string(),
+                via: None,
+            }));
+            DerivedExpr::Growth { current, previous }
+        }
+        crate::model::TimeSuffix::MomGrowth => {
+            let current = Box::new(DerivedExpr::MeasureRef(measure_name.to_string()));
+            let previous = Box::new(DerivedExpr::TimeFunction(TimeFunction::PriorPeriod {
+                measure: measure_name.to_string(),
+                periods_back: 1,
+                via: None,
+            }));
+            DerivedExpr::Growth { current, previous }
+        }
+        crate::model::TimeSuffix::WowGrowth => {
+            let current = Box::new(DerivedExpr::MeasureRef(measure_name.to_string()));
+            let previous = Box::new(DerivedExpr::TimeFunction(TimeFunction::PriorPeriod {
+                measure: measure_name.to_string(),
+                periods_back: 1,
+                via: None,
+            }));
+            DerivedExpr::Growth { current, previous }
+        }
+
+        // Delta calculations
+        crate::model::TimeSuffix::YoyDelta => {
+            let current = Box::new(DerivedExpr::MeasureRef(measure_name.to_string()));
+            let previous = Box::new(DerivedExpr::TimeFunction(TimeFunction::PriorYear {
+                measure: measure_name.to_string(),
+                via: None,
+            }));
+            DerivedExpr::Delta { current, previous }
+        }
+        crate::model::TimeSuffix::QoqDelta => {
+            let current = Box::new(DerivedExpr::MeasureRef(measure_name.to_string()));
+            let previous = Box::new(DerivedExpr::TimeFunction(TimeFunction::PriorQuarter {
+                measure: measure_name.to_string(),
+                via: None,
+            }));
+            DerivedExpr::Delta { current, previous }
+        }
+        crate::model::TimeSuffix::MomDelta => {
+            let current = Box::new(DerivedExpr::MeasureRef(measure_name.to_string()));
+            let previous = Box::new(DerivedExpr::TimeFunction(TimeFunction::PriorPeriod {
+                measure: measure_name.to_string(),
+                periods_back: 1,
+                via: None,
+            }));
+            DerivedExpr::Delta { current, previous }
+        }
+        crate::model::TimeSuffix::WowDelta => {
+            let current = Box::new(DerivedExpr::MeasureRef(measure_name.to_string()));
+            let previous = Box::new(DerivedExpr::TimeFunction(TimeFunction::PriorPeriod {
+                measure: measure_name.to_string(),
+                periods_back: 1,
+                via: None,
+            }));
+            DerivedExpr::Delta { current, previous }
+        }
+
+        // Rolling windows
+        crate::model::TimeSuffix::Rolling3m => {
+            DerivedExpr::TimeFunction(TimeFunction::RollingSum {
+                measure: measure_name.to_string(),
+                periods: 3,
+                via: None,
+            })
+        }
+        crate::model::TimeSuffix::Rolling6m => {
+            DerivedExpr::TimeFunction(TimeFunction::RollingSum {
+                measure: measure_name.to_string(),
+                periods: 6,
+                via: None,
+            })
+        }
+        crate::model::TimeSuffix::Rolling12m => {
+            DerivedExpr::TimeFunction(TimeFunction::RollingSum {
+                measure: measure_name.to_string(),
+                periods: 12,
+                via: None,
+            })
+        }
+        crate::model::TimeSuffix::Rolling3mAvg => {
+            DerivedExpr::TimeFunction(TimeFunction::RollingAvg {
+                measure: measure_name.to_string(),
+                periods: 3,
+                via: None,
+            })
+        }
+        crate::model::TimeSuffix::Rolling6mAvg => {
+            DerivedExpr::TimeFunction(TimeFunction::RollingAvg {
+                measure: measure_name.to_string(),
+                periods: 6,
+                via: None,
+            })
+        }
+        crate::model::TimeSuffix::Rolling12mAvg => {
+            DerivedExpr::TimeFunction(TimeFunction::RollingAvg {
+                measure: measure_name.to_string(),
+                periods: 12,
+                via: None,
+            })
         }
     };
 
