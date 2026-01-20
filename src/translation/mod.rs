@@ -506,8 +506,9 @@ pub fn translate_report(report: &Report, model: &Model) -> Result<SemanticQuery,
                 query.select.push(base_select);
                 query.derived.push(derived_field);
             }
-            crate::model::ShowItem::InlineMeasure { .. } => {
-                // TODO: Handle inline measures
+            crate::model::ShowItem::InlineMeasure { name, expr, label } => {
+                let derived_field = translate_inline_measure(name, expr, label.clone())?;
+                query.derived.push(derived_field);
             }
         }
     }
@@ -563,6 +564,40 @@ fn translate_sort_items(sort_items: &[crate::model::SortItem]) -> Vec<OrderField
             descending: matches!(item.direction, crate::model::SortDirection::Desc),
         })
         .collect()
+}
+
+/// Translate an inline measure expression to a DerivedField.
+///
+/// Inline measures are SQL expressions that reference other measures by name.
+/// Example: "revenue - cost" creates a derived measure from two base measures.
+///
+/// This is a skeleton implementation. Full implementation requires:
+/// 1. SQL expression parser to parse "revenue - cost" into an AST
+/// 2. AST transformer to convert to DerivedExpr tree
+/// 3. Validation that referenced measures exist
+///
+/// For now, this returns an error indicating the feature is not yet implemented.
+fn translate_inline_measure(
+    _name: &str,
+    expr: &crate::model::table::SqlExpr,
+    _label: Option<String>,
+) -> Result<DerivedField, TranslationError> {
+    // TODO: Parse SQL expressions like "revenue - cost" into DerivedExpr::BinaryOp
+    // This requires a SQL expression parser that can handle:
+    // - Binary operations: +, -, *, /, %
+    // - Unary operations: -, NOT
+    // - Function calls: COALESCE, NULLIF, etc.
+    // - Literals: numbers, strings, booleans
+    // - Measure references: column names that resolve to measures
+    //
+    // The parser should build a DerivedExpr tree that can be used by the
+    // semantic planner to generate the final SQL.
+
+    Err(TranslationError::SqlCompilationError {
+        expression: expr.sql.clone(),
+        error: "Inline measure SQL parsing not yet implemented - needs DerivedExpr parser"
+            .to_string(),
+    })
 }
 
 /// Compile a SQL expression by replacing @atom references with qualified table.column.

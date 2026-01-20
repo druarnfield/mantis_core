@@ -175,6 +175,121 @@ fn test_translate_sort_and_limit() {
 }
 
 #[test]
+fn test_translate_inline_measure() {
+    use mantis::dsl::span::Span;
+    use mantis::model::{Atom, AtomType, Measure, MeasureBlock, ShowItem, SqlExpr, Table};
+
+    let mut atoms = HashMap::new();
+    atoms.insert(
+        "revenue".to_string(),
+        Atom {
+            name: "revenue".to_string(),
+            data_type: AtomType::Decimal,
+        },
+    );
+    atoms.insert(
+        "cost".to_string(),
+        Atom {
+            name: "cost".to_string(),
+            data_type: AtomType::Decimal,
+        },
+    );
+
+    let mut tables = HashMap::new();
+    tables.insert(
+        "fact_sales".to_string(),
+        Table {
+            name: "fact_sales".to_string(),
+            source: "dbo.fact_sales".to_string(),
+            atoms,
+            times: HashMap::new(),
+            slicers: HashMap::new(),
+        },
+    );
+
+    let mut measures = HashMap::new();
+    let mut measure_map = HashMap::new();
+    measure_map.insert(
+        "revenue".to_string(),
+        Measure {
+            name: "revenue".to_string(),
+            expr: SqlExpr {
+                sql: "sum(@revenue)".to_string(),
+                span: Span::default(),
+            },
+            filter: None,
+            null_handling: None,
+        },
+    );
+    measure_map.insert(
+        "cost".to_string(),
+        Measure {
+            name: "cost".to_string(),
+            expr: SqlExpr {
+                sql: "sum(@cost)".to_string(),
+                span: Span::default(),
+            },
+            filter: None,
+            null_handling: None,
+        },
+    );
+
+    measures.insert(
+        "fact_sales".to_string(),
+        MeasureBlock {
+            table_name: "fact_sales".to_string(),
+            measures: measure_map,
+        },
+    );
+
+    let model = Model {
+        defaults: None,
+        calendars: HashMap::new(),
+        dimensions: HashMap::new(),
+        tables,
+        measures,
+        reports: HashMap::new(),
+    };
+
+    let report = Report {
+        name: "test_report".to_string(),
+        from: vec!["fact_sales".to_string()],
+        use_date: vec![],
+        period: None,
+        group: vec![],
+        show: vec![
+            // Need base measures
+            ShowItem::Measure {
+                name: "revenue".to_string(),
+                label: None,
+            },
+            ShowItem::Measure {
+                name: "cost".to_string(),
+                label: None,
+            },
+            // Inline measure references them
+            ShowItem::InlineMeasure {
+                name: "profit".to_string(),
+                expr: SqlExpr {
+                    sql: "revenue - cost".to_string(),
+                    span: Span::default(),
+                },
+                label: Some("Profit".to_string()),
+            },
+        ],
+        filters: vec![],
+        sort: vec![],
+        limit: None,
+    };
+
+    let result = translation::translate_report(&report, &model);
+    // Inline measures not fully implemented yet - should return error
+    assert!(result.is_err());
+    // TODO: Once SQL expression parsing is implemented, this test should pass
+    // and verify: query.select.len() == 2, query.derived.len() == 1
+}
+
+#[test]
 fn test_compile_sql_expression_with_atoms() {
     use mantis::dsl::span::Span;
     use mantis::model::{Atom, AtomType, SqlExpr, Table};
