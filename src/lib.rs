@@ -51,6 +51,7 @@ pub mod metadata;
 pub mod model;
 pub mod semantic;
 pub mod sql;
+pub mod translation;
 pub mod validation;
 pub mod worker;
 
