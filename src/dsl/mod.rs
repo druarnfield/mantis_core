@@ -55,6 +55,7 @@ pub mod ast;
 pub mod lexer;
 pub mod parser;
 pub mod span;
+pub mod sql_expr;
 
 pub use ast::*;
 pub use span::{Span, Spanned};
