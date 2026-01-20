@@ -87,8 +87,60 @@ pub fn validate(model: &Model) -> Result<(), Vec<ValidationError>> {
     }
 }
 
-fn validate_references(_model: &Model, _errors: &mut Vec<ValidationError>) {
-    // Placeholder - will implement in next task
+fn validate_references(model: &Model, errors: &mut Vec<ValidationError>) {
+    // Validate table time bindings reference existing calendars
+    for (table_name, table) in &model.tables {
+        for (time_name, time_binding) in &table.times {
+            if !model.calendars.contains_key(&time_binding.calendar) {
+                errors.push(ValidationError::UndefinedReference {
+                    entity_type: "Table".to_string(),
+                    entity_name: table_name.clone(),
+                    reference_type: "calendar".to_string(),
+                    reference_name: time_binding.calendar.clone(),
+                });
+            }
+        }
+
+        // Validate slicer foreign keys reference existing dimensions
+        for (slicer_name, slicer) in &table.slicers {
+            if let crate::model::Slicer::ForeignKey { dimension, .. } = slicer {
+                if !model.dimensions.contains_key(dimension) {
+                    errors.push(ValidationError::UndefinedReference {
+                        entity_type: "Table".to_string(),
+                        entity_name: format!("{}.{}", table_name, slicer_name),
+                        reference_type: "dimension".to_string(),
+                        reference_name: dimension.clone(),
+                    });
+                }
+            }
+        }
+    }
+
+    // Validate measure blocks reference existing tables
+    for (table_name, _measure_block) in &model.measures {
+        if !model.tables.contains_key(table_name) {
+            errors.push(ValidationError::UndefinedReference {
+                entity_type: "MeasureBlock".to_string(),
+                entity_name: table_name.clone(),
+                reference_type: "table".to_string(),
+                reference_name: table_name.clone(),
+            });
+        }
+    }
+
+    // Validate reports reference existing tables
+    for (report_name, report) in &model.reports {
+        for table_ref in &report.from {
+            if !model.tables.contains_key(table_ref) {
+                errors.push(ValidationError::UndefinedReference {
+                    entity_type: "Report".to_string(),
+                    entity_name: report_name.clone(),
+                    reference_type: "table".to_string(),
+                    reference_name: table_ref.clone(),
+                });
+            }
+        }
+    }
 }
 
 fn validate_circular_dependencies(model: &Model, errors: &mut Vec<ValidationError>) {

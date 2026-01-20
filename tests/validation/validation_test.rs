@@ -19,6 +19,99 @@ fn test_validate_empty_model() {
 }
 
 #[test]
+fn test_detect_undefined_calendar_reference() {
+    use mantis_core::model::{GrainLevel, Table, TimeBinding};
+
+    let mut times = HashMap::new();
+    times.insert(
+        "order_date_id".to_string(),
+        TimeBinding {
+            name: "order_date_id".to_string(),
+            calendar: "nonexistent_calendar".to_string(), // Undefined!
+            grain: GrainLevel::Day,
+        },
+    );
+
+    let table = Table {
+        name: "fact_sales".to_string(),
+        source: "dbo.fact_sales".to_string(),
+        atoms: HashMap::new(),
+        times,
+        slicers: HashMap::new(),
+    };
+
+    let mut model = model::Model {
+        defaults: None,
+        calendars: HashMap::new(), // Empty - no calendars defined
+        dimensions: HashMap::new(),
+        tables: HashMap::new(),
+        measures: HashMap::new(),
+        reports: HashMap::new(),
+    };
+
+    model.tables.insert("fact_sales".to_string(), table);
+
+    let result = validation::validate(&model);
+    assert!(result.is_err());
+
+    let errors = result.unwrap_err();
+    assert_eq!(errors.len(), 1);
+
+    match &errors[0] {
+        validation::ValidationError::UndefinedReference { reference_name, .. } => {
+            assert_eq!(reference_name, "nonexistent_calendar");
+        }
+        _ => panic!("Expected UndefinedReference error"),
+    }
+}
+
+#[test]
+fn test_detect_undefined_dimension_reference() {
+    use mantis_core::model::{Slicer, Table};
+
+    let mut slicers = HashMap::new();
+    slicers.insert(
+        "customer_id".to_string(),
+        Slicer::ForeignKey {
+            name: "customer_id".to_string(),
+            dimension: "nonexistent_dimension".to_string(), // Undefined!
+            key: "customer_id".to_string(),
+        },
+    );
+
+    let table = Table {
+        name: "fact_sales".to_string(),
+        source: "dbo.fact_sales".to_string(),
+        atoms: HashMap::new(),
+        times: HashMap::new(),
+        slicers,
+    };
+
+    let mut model = model::Model {
+        defaults: None,
+        calendars: HashMap::new(),
+        dimensions: HashMap::new(), // Empty - no dimensions defined
+        tables: HashMap::new(),
+        measures: HashMap::new(),
+        reports: HashMap::new(),
+    };
+
+    model.tables.insert("fact_sales".to_string(), table);
+
+    let result = validation::validate(&model);
+    assert!(result.is_err());
+
+    let errors = result.unwrap_err();
+    assert!(errors.iter().any(|e| matches!(
+        e,
+        validation::ValidationError::UndefinedReference {
+            reference_name,
+            ..
+        } if reference_name == "nonexistent_dimension"
+    )));
+}
+
+#[test]
 fn test_validation_error_display() {
     let error = validation::ValidationError::UndefinedReference {
         entity_type: "Table".to_string(),
