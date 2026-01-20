@@ -3,6 +3,9 @@
 //! This module provides a parser that transforms a token stream from the lexer
 //! into an AST (Abstract Syntax Tree) for semantic model definitions.
 
+// Chumsky parsers are cheap to clone and cloning is required for parser combinators
+#![allow(clippy::clone_on_copy)]
+
 use chumsky::prelude::*;
 use chumsky::input::ValueInput;
 

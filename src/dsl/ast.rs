@@ -83,6 +83,7 @@ pub enum Month {
 
 impl Month {
     /// Parse a month from a string.
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "january" | "jan" => Some(Month::January),
@@ -116,6 +117,7 @@ pub enum Weekday {
 
 impl Weekday {
     /// Parse a weekday from a string.
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "monday" | "mon" => Some(Weekday::Monday),
@@ -144,6 +146,7 @@ pub enum NullHandling {
 
 impl NullHandling {
     /// Parse a NULL handling mode from a string.
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "coalesce_zero" => Some(NullHandling::CoalesceZero),
@@ -232,6 +235,7 @@ pub enum GrainLevel {
 
 impl GrainLevel {
     /// Parse a grain level from a string.
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "minute" => Some(GrainLevel::Minute),
@@ -386,6 +390,7 @@ pub enum DataType {
 
 impl DataType {
     /// Parse a data type from a string.
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "string" => Some(DataType::String),
@@ -438,6 +443,7 @@ pub enum AtomType {
 
 impl AtomType {
     /// Parse an atom type from a string.
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "int" => Some(AtomType::Int),
@@ -617,6 +623,7 @@ pub enum PeriodUnit {
 
 impl PeriodUnit {
     /// Parse a period unit from a string.
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "days" | "day" => Some(PeriodUnit::Days),
@@ -715,6 +722,7 @@ pub enum TimeSuffix {
 
 impl TimeSuffix {
     /// Parse a time suffix from a string.
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             // Accumulations
@@ -777,6 +785,7 @@ pub enum SortDirection {
 
 impl SortDirection {
     /// Parse a sort direction from a string.
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "asc" => Some(SortDirection::Asc),
