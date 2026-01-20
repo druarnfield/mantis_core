@@ -125,3 +125,7 @@ path = "tests/validation/validation_test.rs"
 [[test]]
 name = "translation_test"
 path = "tests/translation/translation_test.rs"
+
+[[test]]
+name = "integration_test"
+path = "tests/translation/integration_test.rs"
