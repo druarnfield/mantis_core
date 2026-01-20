@@ -1,7 +1,9 @@
 //! DSL-first semantic model types.
 
+pub mod table;
 pub mod types;
 
+pub use table::{Atom, Slicer, SqlExpr, Table, TimeBinding};
 pub use types::{AtomType, DataType, GrainLevel, Month, NullHandling, Weekday};
 
 use std::collections::HashMap;
@@ -19,7 +21,7 @@ pub struct Model {
     pub dimensions: HashMap<String, Dimension>,
 
     /// Tables (universal: sources, facts, wide tables, CSVs)
-    pub tables: HashMap<String, Table>,
+    pub tables: HashMap<String, table::Table>,
 
     /// Measure blocks (one per table)
     pub measures: HashMap<String, MeasureBlock>,
@@ -37,9 +39,6 @@ pub struct Calendar;
 
 #[derive(Debug, Clone)]
 pub struct Dimension;
-
-#[derive(Debug, Clone)]
-pub struct Table;
 
 #[derive(Debug, Clone)]
 pub struct MeasureBlock;
