@@ -90,4 +90,63 @@ mod tests {
             Some(Slicer::Via { .. })
         ));
     }
+
+    #[test]
+    fn test_table_with_inline_slicer() {
+        use mantis_core::model::DataType;
+
+        let mut slicers = HashMap::new();
+        slicers.insert(
+            "status".to_string(),
+            Slicer::Inline {
+                name: "status".to_string(),
+                data_type: DataType::String,
+            },
+        );
+
+        let table = Table {
+            name: "fact_sales".to_string(),
+            source: "dbo.fact_sales".to_string(),
+            atoms: HashMap::new(),
+            times: HashMap::new(),
+            slicers,
+        };
+
+        assert!(matches!(
+            table.slicers.get("status"),
+            Some(Slicer::Inline { .. })
+        ));
+    }
+
+    #[test]
+    fn test_table_with_calculated_slicer() {
+        use mantis_core::dsl::span::Span;
+        use mantis_core::model::{DataType, SqlExpr};
+
+        let mut slicers = HashMap::new();
+        slicers.insert(
+            "total_amount".to_string(),
+            Slicer::Calculated {
+                name: "total_amount".to_string(),
+                data_type: DataType::Decimal,
+                expr: SqlExpr {
+                    sql: "@revenue + @tax".to_string(),
+                    span: Span::new(0, 0),
+                },
+            },
+        );
+
+        let table = Table {
+            name: "fact_sales".to_string(),
+            source: "dbo.fact_sales".to_string(),
+            atoms: HashMap::new(),
+            times: HashMap::new(),
+            slicers,
+        };
+
+        assert!(matches!(
+            table.slicers.get("total_amount"),
+            Some(Slicer::Calculated { .. })
+        ));
+    }
 }
