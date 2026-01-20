@@ -129,6 +129,52 @@ fn test_translate_filters() {
 }
 
 #[test]
+fn test_translate_sort_and_limit() {
+    use mantis::model::{SortDirection, SortItem};
+
+    let model = Model {
+        defaults: None,
+        calendars: HashMap::new(),
+        dimensions: HashMap::new(),
+        tables: HashMap::new(),
+        measures: HashMap::new(),
+        reports: HashMap::new(),
+    };
+
+    let report = Report {
+        name: "test_report".to_string(),
+        from: vec!["fact_sales".to_string()],
+        use_date: vec![],
+        period: None,
+        group: vec![],
+        show: vec![],
+        filters: vec![],
+        sort: vec![
+            SortItem {
+                column: "revenue".to_string(),
+                direction: SortDirection::Desc,
+            },
+            SortItem {
+                column: "region".to_string(),
+                direction: SortDirection::Asc,
+            },
+        ],
+        limit: Some(100),
+    };
+
+    let result = translation::translate_report(&report, &model);
+    assert!(result.is_ok());
+
+    let query = result.unwrap();
+    assert_eq!(query.order_by.len(), 2);
+    assert_eq!(query.order_by[0].field.field, "revenue");
+    assert!(query.order_by[0].descending);
+    assert_eq!(query.order_by[1].field.field, "region");
+    assert!(!query.order_by[1].descending);
+    assert_eq!(query.limit, Some(100));
+}
+
+#[test]
 fn test_compile_sql_expression_with_atoms() {
     use mantis::dsl::span::Span;
     use mantis::model::{Atom, AtomType, SqlExpr, Table};

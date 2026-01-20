@@ -2,7 +2,7 @@
 
 use crate::model::{Model, Report};
 use crate::semantic::planner::types::{
-    DerivedExpr, DerivedField, SelectField, SemanticQuery, TimeFunction,
+    DerivedExpr, DerivedField, OrderField, SelectField, SemanticQuery, TimeFunction,
 };
 use regex::Regex;
 use sqlparser::dialect::GenericDialect;
@@ -518,7 +518,11 @@ pub fn translate_report(report: &Report, model: &Model) -> Result<SemanticQuery,
     let _compiled_filters = translate_filters(&report.filters, from_table, model)?;
     // Filters are compiled but not yet added to query - full parsing comes later
 
-    // TODO: Translate sort, limit
+    // Translate sort items
+    query.order_by = translate_sort_items(&report.sort);
+
+    // Translate limit
+    query.limit = report.limit;
 
     Ok(query)
 }
@@ -545,6 +549,20 @@ fn translate_filters(
     }
 
     Ok(compiled_filters)
+}
+
+/// Translate sort items from Report to SemanticQuery OrderField.
+///
+/// Maps column names (aliases) to OrderField with descending flag.
+/// The column name references the alias of a field in the select list.
+fn translate_sort_items(sort_items: &[crate::model::SortItem]) -> Vec<OrderField> {
+    sort_items
+        .iter()
+        .map(|item| OrderField {
+            field: crate::semantic::planner::types::FieldRef::new("", &item.column),
+            descending: matches!(item.direction, crate::model::SortDirection::Desc),
+        })
+        .collect()
 }
 
 /// Compile a SQL expression by replacing @atom references with qualified table.column.
