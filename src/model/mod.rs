@@ -8,7 +8,7 @@ pub mod table;
 pub mod types;
 
 pub use calendar::{Calendar, CalendarBody, DrillPath, PhysicalCalendar};
-pub use dimension::{Attribute, Dimension};
+pub use dimension::{Attribute, Dimension, DimensionDrillPath};
 pub use measure::{Measure, MeasureBlock};
 pub use report::{GroupItem, PeriodExpr, Report, ShowItem, SortDirection, SortItem, TimeSuffix};
 pub use table::{Atom, Slicer, SqlExpr, Table, TimeBinding};

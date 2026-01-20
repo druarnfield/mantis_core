@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use mantis_core::model::{Attribute, DataType, Dimension, DrillPath, GrainLevel};
+    use mantis_core::model::{Attribute, DataType, Dimension, DimensionDrillPath};
     use std::collections::HashMap;
 
     #[test]
@@ -39,9 +39,13 @@ mod tests {
         let mut drill_paths = HashMap::new();
         drill_paths.insert(
             "geo".to_string(),
-            DrillPath {
+            DimensionDrillPath {
                 name: "geo".to_string(),
-                levels: vec![GrainLevel::Day, GrainLevel::Month],
+                levels: vec![
+                    "city".to_string(),
+                    "state".to_string(),
+                    "country".to_string(),
+                ],
             },
         );
 
@@ -55,5 +59,9 @@ mod tests {
 
         assert_eq!(dimension.drill_paths.len(), 1);
         assert!(dimension.drill_paths.contains_key("geo"));
+
+        // Verify it's attribute names, not grain levels
+        let geo_path = dimension.drill_paths.get("geo").unwrap();
+        assert_eq!(geo_path.levels, vec!["city", "state", "country"]);
     }
 }
