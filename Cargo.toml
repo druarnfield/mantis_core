@@ -73,3 +73,7 @@ insta = "1.41"
 [[test]]
 name = "types_test"
 path = "tests/model/types_test.rs"
+
+[[test]]
+name = "measure_test"
+path = "tests/model/measure_test.rs"
