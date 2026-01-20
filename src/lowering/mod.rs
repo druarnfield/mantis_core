@@ -178,16 +178,111 @@ fn lower_dimension(dimension: ast::Dimension) -> Result<model::Dimension, Loweri
     })
 }
 
-fn lower_table(_table: ast::Table) -> Result<model::Table, LoweringError> {
-    // Placeholder
-    Err(LoweringError::NotImplemented("Table".to_string()))
+fn lower_table(table: ast::Table) -> Result<model::Table, LoweringError> {
+    let name = table.name.value;
+    let source = table.source.value;
+
+    // Convert atoms from Vec<Spanned<Atom>>
+    let mut atoms = std::collections::HashMap::new();
+    for atom in table.atoms {
+        let atom_name = atom.value.name.value.clone();
+        atoms.insert(
+            atom_name.clone(),
+            model::table::Atom {
+                name: atom_name,
+                data_type: atom.value.atom_type.value,
+            },
+        );
+    }
+
+    // Convert times from Vec<Spanned<TimeBinding>>
+    let mut times = std::collections::HashMap::new();
+    for time in table.times {
+        let time_name = time.value.name.value.clone();
+        times.insert(
+            time_name.clone(),
+            model::table::TimeBinding {
+                name: time_name,
+                calendar: time.value.calendar.value,
+                grain: time.value.grain.value,
+            },
+        );
+    }
+
+    // Convert slicers from Vec<Spanned<Slicer>>
+    let mut slicers = std::collections::HashMap::new();
+    for slicer in table.slicers {
+        let slicer_name = slicer.value.name.value.clone();
+
+        let model_slicer = match slicer.value.kind.value {
+            ast::SlicerKind::Inline { data_type } => model::table::Slicer::Inline {
+                name: slicer_name.clone(),
+                data_type,
+            },
+            ast::SlicerKind::ForeignKey {
+                dimension,
+                key_column,
+            } => model::table::Slicer::ForeignKey {
+                name: slicer_name.clone(),
+                dimension,
+                key: key_column,
+            },
+            ast::SlicerKind::Via { fk_slicer } => model::table::Slicer::Via {
+                name: slicer_name.clone(),
+                fk_slicer,
+            },
+            ast::SlicerKind::Calculated { data_type, expr } => model::table::Slicer::Calculated {
+                name: slicer_name.clone(),
+                data_type,
+                expr: model::table::SqlExpr {
+                    sql: expr.sql,
+                    span: expr.span,
+                },
+            },
+        };
+
+        slicers.insert(slicer_name, model_slicer);
+    }
+
+    Ok(model::Table {
+        name,
+        source,
+        atoms,
+        times,
+        slicers,
+    })
 }
 
 fn lower_measure_block(
-    _measure_block: ast::MeasureBlock,
+    measure_block: ast::MeasureBlock,
 ) -> Result<model::MeasureBlock, LoweringError> {
-    // Placeholder
-    Err(LoweringError::NotImplemented("MeasureBlock".to_string()))
+    let table_name = measure_block.table.value;
+
+    // Convert measures from Vec<Spanned<Measure>>
+    let mut measures = std::collections::HashMap::new();
+    for measure in measure_block.measures {
+        let measure_name = measure.value.name.value.clone();
+        measures.insert(
+            measure_name.clone(),
+            model::measure::Measure {
+                name: measure_name,
+                expr: model::table::SqlExpr {
+                    sql: measure.value.expr.value.sql,
+                    span: measure.value.expr.value.span,
+                },
+                filter: measure.value.filter.map(|f| model::table::SqlExpr {
+                    sql: f.value.sql,
+                    span: f.value.span,
+                }),
+                null_handling: measure.value.null_handling.map(|nh| nh.value),
+            },
+        );
+    }
+
+    Ok(model::MeasureBlock {
+        table_name,
+        measures,
+    })
 }
 
 fn lower_report(_report: ast::Report) -> Result<model::Report, LoweringError> {

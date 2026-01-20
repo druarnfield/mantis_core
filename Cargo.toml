@@ -101,3 +101,11 @@ path = "tests/lowering/calendar_lowering_test.rs"
 [[test]]
 name = "dimension_lowering_test"
 path = "tests/lowering/dimension_lowering_test.rs"
+
+[[test]]
+name = "table_lowering_test"
+path = "tests/lowering/table_lowering_test.rs"
+
+[[test]]
+name = "measure_lowering_test"
+path = "tests/lowering/measure_lowering_test.rs"
