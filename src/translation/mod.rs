@@ -512,9 +512,39 @@ pub fn translate_report(report: &Report, model: &Model) -> Result<SemanticQuery,
         }
     }
 
-    // TODO: Translate filters, sort, limit
+    // Translate filters (compile SQL expressions)
+    // Note: For now, we compile the SQL but store as raw strings
+    // TODO: Parse compiled SQL into FieldFilter structures
+    let _compiled_filters = translate_filters(&report.filters, from_table, model)?;
+    // Filters are compiled but not yet added to query - full parsing comes later
+
+    // TODO: Translate sort, limit
 
     Ok(query)
+}
+
+/// Translate filter expressions by compiling SQL with @atom substitution.
+///
+/// For now, this compiles the SQL expressions but does not parse them into
+/// FieldFilter structures. That will require a SQL expression parser.
+///
+/// Future enhancement: Parse compiled SQL into FieldFilter with:
+/// - field: FieldRef
+/// - op: FilterOp (Eq, Gt, etc.)
+/// - value: FilterValue
+fn translate_filters(
+    filters: &[crate::model::table::SqlExpr],
+    from_table: &str,
+    model: &Model,
+) -> Result<Vec<String>, TranslationError> {
+    let mut compiled_filters = Vec::new();
+
+    for filter in filters {
+        let compiled = compile_sql_expr(filter, from_table, model)?;
+        compiled_filters.push(compiled);
+    }
+
+    Ok(compiled_filters)
 }
 
 /// Compile a SQL expression by replacing @atom references with qualified table.column.
