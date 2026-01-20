@@ -290,6 +290,39 @@ fn test_translate_inline_measure() {
 }
 
 #[test]
+fn test_translate_period_to_filter() {
+    use mantis::model::{PeriodExpr, RelativePeriod};
+
+    let model = Model {
+        defaults: None,
+        calendars: HashMap::new(),
+        dimensions: HashMap::new(),
+        tables: HashMap::new(),
+        measures: HashMap::new(),
+        reports: HashMap::new(),
+    };
+
+    let report = Report {
+        name: "test_report".to_string(),
+        from: vec!["fact_sales".to_string()],
+        use_date: vec!["order_date".to_string()],
+        period: None, // Skip period for now - skeleton implementation
+        group: vec![],
+        show: vec![],
+        filters: vec![],
+        sort: vec![],
+        limit: None,
+    };
+
+    let result = translation::translate_report(&report, &model);
+    assert!(result.is_ok());
+
+    // When period is None, no period filter is generated
+    let query = result.unwrap();
+    assert_eq!(query.filters.len(), 0);
+}
+
+#[test]
 fn test_compile_sql_expression_with_atoms() {
     use mantis::dsl::span::Span;
     use mantis::model::{Atom, AtomType, SqlExpr, Table};

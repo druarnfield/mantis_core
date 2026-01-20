@@ -513,6 +513,11 @@ pub fn translate_report(report: &Report, model: &Model) -> Result<SemanticQuery,
         }
     }
 
+    // Translate period (if specified)
+    // This will generate a date range filter on use_date columns
+    let _period_filter = translate_period(&report.period, &report.use_date)?;
+    // TODO: Add period_filter to query.filters when implemented
+
     // Translate filters (compile SQL expressions)
     // Note: For now, we compile the SQL but store as raw strings
     // TODO: Parse compiled SQL into FieldFilter structures
@@ -526,6 +531,41 @@ pub fn translate_report(report: &Report, model: &Model) -> Result<SemanticQuery,
     query.limit = report.limit;
 
     Ok(query)
+}
+
+/// Translate period expressions into date range filters.
+///
+/// Period expressions like "this_month", "last_year", "ytd" need to be converted
+/// into actual date range filters based on:
+/// 1. The current date (or a reference date)
+/// 2. Calendar logic (fiscal vs. calendar year, week start day, etc.)
+/// 3. The use_date columns to filter on
+///
+/// This is a skeleton implementation. Full implementation requires:
+/// 1. Date arithmetic to compute start/end dates for relative periods
+/// 2. Integration with calendar logic (fiscal year start, week start, etc.)
+/// 3. Support for absolute date ranges
+/// 4. Generation of FieldFilter objects with date comparisons
+///
+/// For now, this returns None if period is None, or an error if period is specified.
+fn translate_period(
+    period: &Option<crate::model::PeriodExpr>,
+    _use_date: &[String],
+) -> Result<Option<String>, TranslationError> {
+    if period.is_some() {
+        // TODO: Implement period to date range conversion
+        // This is a complex feature requiring:
+        // - Date arithmetic (chrono or similar)
+        // - Calendar integration (fiscal year logic)
+        // - Filter generation (FieldFilter with date comparisons)
+        return Err(TranslationError::SqlCompilationError {
+            expression: format!("{:?}", period),
+            error: "Period translation not yet implemented - requires calendar integration"
+                .to_string(),
+        });
+    }
+
+    Ok(None)
 }
 
 /// Translate filter expressions by compiling SQL with @atom substitution.
