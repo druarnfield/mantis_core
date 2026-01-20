@@ -388,6 +388,17 @@ where
         )
         .then_ignore(just(Token::Semicolon));
 
+    // include fiscal statement: include fiscal[January];
+    let include_fiscal_stmt = just(Token::Include)
+        .ignore_then(just(Token::Fiscal))
+        .ignore_then(just(Token::LBracket))
+        .ignore_then(
+            month.clone()
+                .map_with(|m, e| Spanned::new(m, to_span(e.span())))
+        )
+        .then_ignore(just(Token::RBracket))
+        .then_ignore(just(Token::Semicolon));
+
     // Grain mapping for physical calendar: grain = column;
     // e.g., day = date_key;
     let grain_mapping = grain_level.clone()
@@ -405,6 +416,7 @@ where
     // - range ...;  (optional)
     // - drill_path ... { ... };  (zero or more)
     // - week_start ...;  (optional)
+    // - include fiscal[Month];  (optional)
     // We need a flexible parser that handles these in any order
     #[derive(Clone)]
     enum GenCalPart {
@@ -412,6 +424,7 @@ where
         Range(Spanned<CalendarRange>),
         DrillPath(Spanned<DrillPath>),
         WeekStart(Spanned<Weekday>),
+        Fiscal(Spanned<Month>),
     }
 
     let gen_cal_part = choice((
@@ -421,6 +434,7 @@ where
             .map_with(|dp, e| Spanned::new(dp, to_span(e.span())))
             .map(GenCalPart::DrillPath),
         week_start_stmt.clone().map(GenCalPart::WeekStart),
+        include_fiscal_stmt.clone().map(GenCalPart::Fiscal),
     ));
 
     // Generated calendar: calendar name { generate ...; ... }
@@ -434,6 +448,7 @@ where
             let mut range: Option<Spanned<CalendarRange>> = None;
             let mut drill_paths: Vec<Spanned<DrillPath>> = Vec::new();
             let mut week_start: Option<Spanned<Weekday>> = None;
+            let mut fiscal: Option<Spanned<Month>> = None;
 
             for part in parts {
                 match part {
@@ -458,6 +473,12 @@ where
                         }
                         week_start = Some(w);
                     }
+                    GenCalPart::Fiscal(f) => {
+                        if fiscal.is_some() {
+                            return Err(Rich::custom(span, "duplicate include fiscal statement"));
+                        }
+                        fiscal = Some(f);
+                    }
                 }
             }
 
@@ -467,7 +488,7 @@ where
 
             Ok(GeneratedCalendar {
                 base_grain,
-                fiscal: None, // TODO: implement fiscal grain support
+                fiscal,
                 range,
                 drill_paths,
                 week_start,
@@ -1233,6 +1254,35 @@ mod tests {
                         assert!(gen.week_start.is_none());
                     }
                     _ => panic!("Expected Generated calendar"),
+                }
+            }
+            _ => panic!("Expected Calendar item"),
+        }
+    }
+
+    #[test]
+    fn test_parse_generated_calendar_with_fiscal() {
+        let input = r#"
+            calendar fiscal_auto {
+                generate day+;
+                include fiscal[January];
+                range infer;
+            }
+        "#;
+
+        let model = parse_str(input);
+
+        assert_eq!(model.items.len(), 1);
+        match &model.items[0].value {
+            Item::Calendar(cal) => {
+                assert_eq!(cal.name.value, "fiscal_auto");
+
+                match &cal.body.value {
+                    CalendarBody::Generated(gen) => {
+                        assert!(gen.fiscal.is_some());
+                        assert_eq!(gen.fiscal.as_ref().unwrap().value, Month::January);
+                    }
+                    _ => panic!("Expected generated calendar"),
                 }
             }
             _ => panic!("Expected Calendar item"),
