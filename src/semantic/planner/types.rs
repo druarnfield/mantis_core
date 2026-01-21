@@ -164,7 +164,6 @@ pub enum DerivedExpr {
     // =========================================================================
     // Time Intelligence Extensions
     // =========================================================================
-
     /// A time intelligence function (YTD, prior year, rolling, etc.)
     TimeFunction(TimeFunction),
 
@@ -244,6 +243,22 @@ pub enum TimeFunction {
         year_column: Option<String>,
         month_column: Option<String>,
         day_column: Option<String>,
+        via: Option<String>,
+    },
+
+    /// Week-to-date: cumulative sum from start of week.
+    ///
+    /// SQL: `SUM(measure) OVER (PARTITION BY year, week ORDER BY day ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)`
+    WeekToDate {
+        /// The measure to accumulate
+        measure: String,
+        /// Column to partition by (year column from date dimension)
+        year_column: Option<String>,
+        /// Week column for partitioning
+        week_column: Option<String>,
+        /// Column to order by (day column from date dimension)
+        day_column: Option<String>,
+        /// Optional role override (e.g., "ship_date" instead of default "order_date")
         via: Option<String>,
     },
 
@@ -347,6 +362,7 @@ impl TimeFunction {
             Self::YearToDate { measure, .. } => measure,
             Self::QuarterToDate { measure, .. } => measure,
             Self::MonthToDate { measure, .. } => measure,
+            Self::WeekToDate { measure, .. } => measure,
             Self::PriorPeriod { measure, .. } => measure,
             Self::PriorYear { measure, .. } => measure,
             Self::PriorQuarter { measure, .. } => measure,
@@ -361,6 +377,7 @@ impl TimeFunction {
             Self::YearToDate { via, .. } => via.as_deref(),
             Self::QuarterToDate { via, .. } => via.as_deref(),
             Self::MonthToDate { via, .. } => via.as_deref(),
+            Self::WeekToDate { via, .. } => via.as_deref(),
             Self::PriorPeriod { via, .. } => via.as_deref(),
             Self::PriorYear { via, .. } => via.as_deref(),
             Self::PriorQuarter { via, .. } => via.as_deref(),
