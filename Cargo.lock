@@ -1029,6 +1029,7 @@ dependencies = [
  "insta",
  "mime_guess",
  "mlua",
+ "once_cell",
  "open",
  "petgraph",
  "rand",

@@ -1,12 +1,35 @@
 //! Translation of Report model types to SemanticQuery.
+//!
+//! This module provides functions to translate high-level Report structures from the
+//! semantic model DSL into SemanticQuery structures that can be executed by the query planner.
+//!
+//! ## Future Improvements
+//!
+//! ### Code Quality
+//! - **TODO**: Add `#[must_use]` attribute to public functions that return `Result`.
+//!   Functions like `translate_report`, `compile_sql_expr`, etc. should have `#[must_use]`
+//!   to ensure callers don't accidentally ignore errors. This is a Rust best practice
+//!   for functions where ignoring the return value is likely a programming error.
+//!
+//! ### Known Limitations
+//! - Filters are compiled but not added to `query.filters` (requires SQL parsing to FieldFilter)
+//! - Period expressions are not yet implemented (requires calendar integration)
+//! - Inline measures require SQL expression parsing to DerivedExpr
+//! - WTD (Week-to-Date) uses MonthToDate as a placeholder
+//! - PriorMonth and PriorWeek lack granularity distinction
 
 use crate::model::{Model, Report};
 use crate::semantic::planner::types::{
     DerivedExpr, DerivedField, OrderField, SelectField, SemanticQuery, TimeFunction,
 };
+use once_cell::sync::Lazy;
 use regex::Regex;
 use sqlparser::dialect::GenericDialect;
 use sqlparser::parser::Parser;
+
+/// Regex pattern for matching @atom references in SQL expressions.
+/// Compiled once at startup for performance.
+static ATOM_PATTERN: Lazy<Regex> = Lazy::new(|| Regex::new(r"@(\w+)").unwrap());
 
 /// Translation error.
 #[derive(Debug, Clone)]
@@ -267,7 +290,11 @@ fn translate_time_suffix(
             via: None,
         }),
         crate::model::TimeSuffix::Wtd => {
-            // WTD uses MonthToDate as a placeholder (could be refined with week-specific logic)
+            // TODO: WTD currently uses MonthToDate which is semantically incorrect.
+            // This is a known limitation. Proper implementation requires:
+            // - A WeekToDate TimeFunction variant
+            // - Week boundary logic (week start day from calendar)
+            // - Week number calculations for filtering
             DerivedExpr::TimeFunction(TimeFunction::MonthToDate {
                 measure: measure_name.to_string(),
                 year_column: None,
@@ -306,6 +333,11 @@ fn translate_time_suffix(
             })
         }
         crate::model::TimeSuffix::PriorMonth => {
+            // TODO: PriorMonth and PriorWeek both map to PriorPeriod with periods_back: 1,
+            // but they lack granularity distinction (month vs week). Proper implementation requires:
+            // - Adding a period_type parameter to PriorPeriod (Month, Week, Day, etc.)
+            // - Or separate PriorMonth and PriorWeek TimeFunction variants
+            // For now, both behave identically which may cause issues in query generation.
             DerivedExpr::TimeFunction(TimeFunction::PriorPeriod {
                 measure: measure_name.to_string(),
                 periods_back: 1,
@@ -313,6 +345,7 @@ fn translate_time_suffix(
             })
         }
         crate::model::TimeSuffix::PriorWeek => {
+            // TODO: See PriorMonth comment above - same limitation applies here.
             DerivedExpr::TimeFunction(TimeFunction::PriorPeriod {
                 measure: measure_name.to_string(),
                 periods_back: 1,
@@ -489,12 +522,18 @@ pub fn translate_report(report: &Report, model: &Model) -> Result<SemanticQuery,
     }
 
     // Translate show items
+    // Track measures already added to select to avoid duplicates
+    let mut added_measures = std::collections::HashSet::new();
+
     for show_item in &report.show {
         match show_item {
             crate::model::ShowItem::Measure { name, label } => {
                 let select_field =
                     translate_simple_measure(name, label.clone(), from_table, model)?;
-                query.select.push(select_field);
+                // Only add if not already present
+                if added_measures.insert(name.clone()) {
+                    query.select.push(select_field);
+                }
             }
             crate::model::ShowItem::MeasureWithSuffix {
                 name,
@@ -503,7 +542,10 @@ pub fn translate_report(report: &Report, model: &Model) -> Result<SemanticQuery,
             } => {
                 let (base_select, derived_field) =
                     translate_time_suffix(name, *suffix, label.clone(), from_table, model)?;
-                query.select.push(base_select);
+                // Only add base measure if not already present
+                if added_measures.insert(name.clone()) {
+                    query.select.push(base_select);
+                }
                 query.derived.push(derived_field);
             }
             crate::model::ShowItem::InlineMeasure { name, expr, label } => {
@@ -525,7 +567,7 @@ pub fn translate_report(report: &Report, model: &Model) -> Result<SemanticQuery,
     // Filters are compiled but not yet added to query - full parsing comes later
 
     // Translate sort items
-    query.order_by = translate_sort_items(&report.sort);
+    query.order_by = translate_sort_items(&report.sort, from_table);
 
     // Translate limit
     query.limit = report.limit;
@@ -596,11 +638,15 @@ fn translate_filters(
 ///
 /// Maps column names (aliases) to OrderField with descending flag.
 /// The column name references the alias of a field in the select list.
-fn translate_sort_items(sort_items: &[crate::model::SortItem]) -> Vec<OrderField> {
+/// The entity is set to the from_table for proper field resolution.
+fn translate_sort_items(
+    sort_items: &[crate::model::SortItem],
+    from_table: &str,
+) -> Vec<OrderField> {
     sort_items
         .iter()
         .map(|item| OrderField {
-            field: crate::semantic::planner::types::FieldRef::new("", &item.column),
+            field: crate::semantic::planner::types::FieldRef::new(from_table, &item.column),
             descending: matches!(item.direction, crate::model::SortDirection::Desc),
         })
         .collect()
@@ -666,14 +712,11 @@ pub fn compile_sql_expr(
                 name: from_table.to_string(),
             })?;
 
-    // Pattern to match @atom references (word characters after @)
-    let atom_pattern = Regex::new(r"@(\w+)").unwrap();
-
     let mut result = expr.sql.clone();
     let mut atoms_found = Vec::new();
 
     // First pass: collect all @atoms and verify they exist
-    for cap in atom_pattern.captures_iter(&expr.sql) {
+    for cap in ATOM_PATTERN.captures_iter(&expr.sql) {
         let atom_name = cap[1].to_string();
 
         // Verify atom exists in the table

@@ -167,8 +167,10 @@ fn test_translate_sort_and_limit() {
 
     let query = result.unwrap();
     assert_eq!(query.order_by.len(), 2);
+    assert_eq!(query.order_by[0].field.entity, "fact_sales");
     assert_eq!(query.order_by[0].field.field, "revenue");
     assert!(query.order_by[0].descending);
+    assert_eq!(query.order_by[1].field.entity, "fact_sales");
     assert_eq!(query.order_by[1].field.field, "region");
     assert!(!query.order_by[1].descending);
     assert_eq!(query.limit, Some(100));
@@ -712,6 +714,243 @@ fn test_translate_measure_with_ytd_suffix() {
 }
 
 #[test]
+fn test_malformed_sql_expression() {
+    use mantis::dsl::span::Span;
+    use mantis::model::{Atom, AtomType, SqlExpr, Table};
+
+    let mut atoms = HashMap::new();
+    atoms.insert(
+        "revenue".to_string(),
+        Atom {
+            name: "revenue".to_string(),
+            data_type: AtomType::Decimal,
+        },
+    );
+
+    let mut tables = HashMap::new();
+    tables.insert(
+        "fact_sales".to_string(),
+        Table {
+            name: "fact_sales".to_string(),
+            source: "dbo.fact_sales".to_string(),
+            atoms,
+            times: HashMap::new(),
+            slicers: HashMap::new(),
+        },
+    );
+
+    let model = Model {
+        defaults: None,
+        calendars: HashMap::new(),
+        dimensions: HashMap::new(),
+        tables,
+        measures: HashMap::new(),
+        reports: HashMap::new(),
+    };
+
+    let report = Report {
+        name: "test_report".to_string(),
+        from: vec!["fact_sales".to_string()],
+        use_date: vec![],
+        period: None,
+        group: vec![],
+        show: vec![],
+        filters: vec![SqlExpr {
+            sql: "@revenue > 100 AND (@revenue".to_string(), // Malformed: unclosed parenthesis
+            span: Span::default(),
+        }],
+        sort: vec![],
+        limit: None,
+    };
+
+    let result = translation::translate_report(&report, &model);
+    assert!(result.is_err(), "Malformed SQL should cause an error");
+
+    match result.unwrap_err() {
+        translation::TranslationError::SqlCompilationError { expression, error } => {
+            assert!(expression.contains("@revenue > 100"));
+            assert!(
+                error.contains("Invalid SQL"),
+                "Error should mention invalid SQL"
+            );
+        }
+        _ => panic!("Expected SqlCompilationError"),
+    }
+}
+
+#[test]
+fn test_undefined_atom_in_sql() {
+    use mantis::dsl::span::Span;
+    use mantis::model::{Atom, AtomType, SqlExpr, Table};
+
+    let mut atoms = HashMap::new();
+    atoms.insert(
+        "revenue".to_string(),
+        Atom {
+            name: "revenue".to_string(),
+            data_type: AtomType::Decimal,
+        },
+    );
+
+    let mut tables = HashMap::new();
+    tables.insert(
+        "fact_sales".to_string(),
+        Table {
+            name: "fact_sales".to_string(),
+            source: "dbo.fact_sales".to_string(),
+            atoms,
+            times: HashMap::new(),
+            slicers: HashMap::new(),
+        },
+    );
+
+    let model = Model {
+        defaults: None,
+        calendars: HashMap::new(),
+        dimensions: HashMap::new(),
+        tables,
+        measures: HashMap::new(),
+        reports: HashMap::new(),
+    };
+
+    let report = Report {
+        name: "test_report".to_string(),
+        from: vec!["fact_sales".to_string()],
+        use_date: vec![],
+        period: None,
+        group: vec![],
+        show: vec![],
+        filters: vec![SqlExpr {
+            sql: "@revenue > 100 AND @undefined_atom < 50".to_string(), // undefined_atom doesn't exist
+            span: Span::default(),
+        }],
+        sort: vec![],
+        limit: None,
+    };
+
+    let result = translation::translate_report(&report, &model);
+    assert!(result.is_err(), "Undefined atom should cause an error");
+
+    match result.unwrap_err() {
+        translation::TranslationError::SqlCompilationError { expression, error } => {
+            assert!(expression.contains("@undefined_atom"));
+            assert!(error.contains("Undefined atom: @undefined_atom"));
+        }
+        _ => panic!("Expected SqlCompilationError for undefined atom"),
+    }
+}
+
+#[test]
+fn test_multiple_duplicate_measures() {
+    use mantis::dsl::span::Span;
+    use mantis::model::{
+        Atom, AtomType, Measure, MeasureBlock, ShowItem, SqlExpr, Table, TimeSuffix,
+    };
+
+    // Setup model
+    let mut tables = HashMap::new();
+    let mut atoms = HashMap::new();
+    atoms.insert(
+        "revenue".to_string(),
+        Atom {
+            name: "revenue".to_string(),
+            data_type: AtomType::Decimal,
+        },
+    );
+
+    tables.insert(
+        "fact_sales".to_string(),
+        Table {
+            name: "fact_sales".to_string(),
+            source: "dbo.fact_sales".to_string(),
+            atoms,
+            times: HashMap::new(),
+            slicers: HashMap::new(),
+        },
+    );
+
+    let mut measures = HashMap::new();
+    let mut measure_map = HashMap::new();
+    measure_map.insert(
+        "revenue".to_string(),
+        Measure {
+            name: "revenue".to_string(),
+            expr: SqlExpr {
+                sql: "sum(@revenue)".to_string(),
+                span: Span::default(),
+            },
+            filter: None,
+            null_handling: None,
+        },
+    );
+
+    measures.insert(
+        "fact_sales".to_string(),
+        MeasureBlock {
+            table_name: "fact_sales".to_string(),
+            measures: measure_map,
+        },
+    );
+
+    let model = Model {
+        defaults: None,
+        calendars: HashMap::new(),
+        dimensions: HashMap::new(),
+        tables,
+        measures,
+        reports: HashMap::new(),
+    };
+
+    // Report showing revenue multiple times with different time suffixes
+    let report = Report {
+        name: "test_report".to_string(),
+        from: vec!["fact_sales".to_string()],
+        use_date: vec![],
+        period: None,
+        group: vec![],
+        show: vec![
+            ShowItem::Measure {
+                name: "revenue".to_string(),
+                label: Some("Revenue".to_string()),
+            },
+            ShowItem::MeasureWithSuffix {
+                name: "revenue".to_string(),
+                suffix: TimeSuffix::Ytd,
+                label: Some("YTD Revenue".to_string()),
+            },
+            ShowItem::MeasureWithSuffix {
+                name: "revenue".to_string(),
+                suffix: TimeSuffix::Mtd,
+                label: Some("MTD Revenue".to_string()),
+            },
+            ShowItem::Measure {
+                name: "revenue".to_string(),
+                label: Some("Revenue Again".to_string()), // Duplicate!
+            },
+        ],
+        filters: vec![],
+        sort: vec![],
+        limit: None,
+    };
+
+    let result = translation::translate_report(&report, &model);
+    assert!(result.is_ok());
+
+    let query = result.unwrap();
+
+    // The measure should appear only ONCE in select, despite multiple references
+    assert_eq!(
+        query.select.len(),
+        1,
+        "Measure should be deduplicated even with multiple references"
+    );
+    assert_eq!(query.select[0].field.field, "revenue");
+
+    // All time suffixes should be in derived
+    assert_eq!(query.derived.len(), 2);
+}
+
+#[test]
 fn test_translate_all_time_suffixes() {
     use mantis::dsl::span::Span;
     use mantis::model::{
@@ -820,4 +1059,107 @@ fn test_translate_all_time_suffixes() {
         let result = translation::translate_report(&report, &model);
         assert!(result.is_ok(), "Failed to translate suffix: {:?}", suffix);
     }
+}
+
+#[test]
+fn test_measure_deduplication_with_time_suffix() {
+    use mantis::dsl::span::Span;
+    use mantis::model::{
+        Atom, AtomType, Measure, MeasureBlock, ShowItem, SqlExpr, Table, TimeSuffix,
+    };
+
+    // Setup model with measure
+    let mut tables = HashMap::new();
+    let mut atoms = HashMap::new();
+    atoms.insert(
+        "revenue".to_string(),
+        Atom {
+            name: "revenue".to_string(),
+            data_type: AtomType::Decimal,
+        },
+    );
+
+    tables.insert(
+        "fact_sales".to_string(),
+        Table {
+            name: "fact_sales".to_string(),
+            source: "dbo.fact_sales".to_string(),
+            atoms,
+            times: HashMap::new(),
+            slicers: HashMap::new(),
+        },
+    );
+
+    let mut measures = HashMap::new();
+    let mut measure_map = HashMap::new();
+    measure_map.insert(
+        "revenue".to_string(),
+        Measure {
+            name: "revenue".to_string(),
+            expr: SqlExpr {
+                sql: "sum(@revenue)".to_string(),
+                span: Span::default(),
+            },
+            filter: None,
+            null_handling: None,
+        },
+    );
+
+    measures.insert(
+        "fact_sales".to_string(),
+        MeasureBlock {
+            table_name: "fact_sales".to_string(),
+            measures: measure_map,
+        },
+    );
+
+    let model = Model {
+        defaults: None,
+        calendars: HashMap::new(),
+        dimensions: HashMap::new(),
+        tables,
+        measures,
+        reports: HashMap::new(),
+    };
+
+    // Report showing revenue both standalone and with YTD suffix
+    let report = Report {
+        name: "test_report".to_string(),
+        from: vec!["fact_sales".to_string()],
+        use_date: vec![],
+        period: None,
+        group: vec![],
+        show: vec![
+            ShowItem::Measure {
+                name: "revenue".to_string(),
+                label: Some("Revenue".to_string()),
+            },
+            ShowItem::MeasureWithSuffix {
+                name: "revenue".to_string(),
+                suffix: TimeSuffix::Ytd,
+                label: Some("YTD Revenue".to_string()),
+            },
+        ],
+        filters: vec![],
+        sort: vec![],
+        limit: None,
+    };
+
+    let result = translation::translate_report(&report, &model);
+    assert!(result.is_ok());
+
+    let query = result.unwrap();
+
+    // The measure should appear only ONCE in select, even though it's used
+    // both standalone and with a time suffix
+    assert_eq!(
+        query.select.len(),
+        1,
+        "Measure should not be duplicated in select"
+    );
+    assert_eq!(query.select[0].field.field, "revenue");
+
+    // YTD should be in derived
+    assert_eq!(query.derived.len(), 1);
+    assert_eq!(query.derived[0].alias, "YTD Revenue");
 }
