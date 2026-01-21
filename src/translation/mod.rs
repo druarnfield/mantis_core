@@ -326,14 +326,8 @@ fn translate_time_suffix(
             })
         }
         crate::model::TimeSuffix::PriorMonth => {
-            // TODO: PriorMonth and PriorWeek both map to PriorPeriod with periods_back: 1,
-            // but they lack granularity distinction (month vs week). Proper implementation requires:
-            // - Adding a period_type parameter to PriorPeriod (Month, Week, Day, etc.)
-            // - Or separate PriorMonth and PriorWeek TimeFunction variants
-            // For now, both behave identically which may cause issues in query generation.
-            DerivedExpr::TimeFunction(TimeFunction::PriorPeriod {
+            DerivedExpr::TimeFunction(TimeFunction::PriorMonth {
                 measure: measure_name.to_string(),
-                periods_back: 1,
                 via: None,
             })
         }
