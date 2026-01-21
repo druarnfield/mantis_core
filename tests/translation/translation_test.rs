@@ -714,6 +714,285 @@ fn test_translate_measure_with_ytd_suffix() {
 }
 
 #[test]
+fn test_wtd_uses_correct_time_function() {
+    use mantis::dsl::span::Span;
+    use mantis::model::{
+        Atom, AtomType, Measure, MeasureBlock, ShowItem, SqlExpr, Table, TimeSuffix,
+    };
+    use mantis::semantic::planner::types::{DerivedExpr, TimeFunction};
+
+    let mut tables = HashMap::new();
+    let mut atoms = HashMap::new();
+    atoms.insert(
+        "revenue".to_string(),
+        Atom {
+            name: "revenue".to_string(),
+            data_type: AtomType::Decimal,
+        },
+    );
+
+    tables.insert(
+        "fact_sales".to_string(),
+        Table {
+            name: "fact_sales".to_string(),
+            source: "dbo.fact_sales".to_string(),
+            atoms,
+            times: HashMap::new(),
+            slicers: HashMap::new(),
+        },
+    );
+
+    let mut measures = HashMap::new();
+    let mut measure_map = HashMap::new();
+    measure_map.insert(
+        "revenue".to_string(),
+        Measure {
+            name: "revenue".to_string(),
+            expr: SqlExpr {
+                sql: "sum(@revenue)".to_string(),
+                span: Span::default(),
+            },
+            filter: None,
+            null_handling: None,
+        },
+    );
+
+    measures.insert(
+        "fact_sales".to_string(),
+        MeasureBlock {
+            table_name: "fact_sales".to_string(),
+            measures: measure_map,
+        },
+    );
+
+    let model = Model {
+        defaults: None,
+        calendars: HashMap::new(),
+        dimensions: HashMap::new(),
+        tables,
+        measures,
+        reports: HashMap::new(),
+    };
+
+    let report = Report {
+        name: "test_report".to_string(),
+        from: vec!["fact_sales".to_string()],
+        use_date: vec![],
+        period: None,
+        group: vec![],
+        show: vec![ShowItem::MeasureWithSuffix {
+            name: "revenue".to_string(),
+            suffix: TimeSuffix::Wtd,
+            label: Some("WTD Revenue".to_string()),
+        }],
+        filters: vec![],
+        sort: vec![],
+        limit: None,
+    };
+
+    let result = translation::translate_report(&report, &model);
+    assert!(result.is_ok());
+
+    let query = result.unwrap();
+    assert_eq!(query.derived.len(), 1);
+
+    // Verify WTD uses WeekToDate, not MonthToDate
+    match &query.derived[0].expression {
+        DerivedExpr::TimeFunction(TimeFunction::WeekToDate { measure, .. }) => {
+            assert_eq!(measure, "revenue", "WTD should use WeekToDate variant");
+        }
+        _ => panic!("Expected WTD to use WeekToDate TimeFunction variant"),
+    }
+}
+
+#[test]
+fn test_prior_month_uses_correct_time_function() {
+    use mantis::dsl::span::Span;
+    use mantis::model::{
+        Atom, AtomType, Measure, MeasureBlock, ShowItem, SqlExpr, Table, TimeSuffix,
+    };
+    use mantis::semantic::planner::types::{DerivedExpr, TimeFunction};
+
+    let mut tables = HashMap::new();
+    let mut atoms = HashMap::new();
+    atoms.insert(
+        "revenue".to_string(),
+        Atom {
+            name: "revenue".to_string(),
+            data_type: AtomType::Decimal,
+        },
+    );
+
+    tables.insert(
+        "fact_sales".to_string(),
+        Table {
+            name: "fact_sales".to_string(),
+            source: "dbo.fact_sales".to_string(),
+            atoms,
+            times: HashMap::new(),
+            slicers: HashMap::new(),
+        },
+    );
+
+    let mut measures = HashMap::new();
+    let mut measure_map = HashMap::new();
+    measure_map.insert(
+        "revenue".to_string(),
+        Measure {
+            name: "revenue".to_string(),
+            expr: SqlExpr {
+                sql: "sum(@revenue)".to_string(),
+                span: Span::default(),
+            },
+            filter: None,
+            null_handling: None,
+        },
+    );
+
+    measures.insert(
+        "fact_sales".to_string(),
+        MeasureBlock {
+            table_name: "fact_sales".to_string(),
+            measures: measure_map,
+        },
+    );
+
+    let model = Model {
+        defaults: None,
+        calendars: HashMap::new(),
+        dimensions: HashMap::new(),
+        tables,
+        measures,
+        reports: HashMap::new(),
+    };
+
+    let report = Report {
+        name: "test_report".to_string(),
+        from: vec!["fact_sales".to_string()],
+        use_date: vec![],
+        period: None,
+        group: vec![],
+        show: vec![ShowItem::MeasureWithSuffix {
+            name: "revenue".to_string(),
+            suffix: TimeSuffix::PriorMonth,
+            label: Some("Prior Month Revenue".to_string()),
+        }],
+        filters: vec![],
+        sort: vec![],
+        limit: None,
+    };
+
+    let result = translation::translate_report(&report, &model);
+    assert!(result.is_ok());
+
+    let query = result.unwrap();
+    assert_eq!(query.derived.len(), 1);
+
+    // Verify PriorMonth uses PriorMonth, not generic PriorPeriod
+    match &query.derived[0].expression {
+        DerivedExpr::TimeFunction(TimeFunction::PriorMonth { measure, .. }) => {
+            assert_eq!(
+                measure, "revenue",
+                "PriorMonth should use PriorMonth variant"
+            );
+        }
+        _ => panic!("Expected PriorMonth to use PriorMonth TimeFunction variant"),
+    }
+}
+
+#[test]
+fn test_prior_week_uses_correct_time_function() {
+    use mantis::dsl::span::Span;
+    use mantis::model::{
+        Atom, AtomType, Measure, MeasureBlock, ShowItem, SqlExpr, Table, TimeSuffix,
+    };
+    use mantis::semantic::planner::types::{DerivedExpr, TimeFunction};
+
+    let mut tables = HashMap::new();
+    let mut atoms = HashMap::new();
+    atoms.insert(
+        "revenue".to_string(),
+        Atom {
+            name: "revenue".to_string(),
+            data_type: AtomType::Decimal,
+        },
+    );
+
+    tables.insert(
+        "fact_sales".to_string(),
+        Table {
+            name: "fact_sales".to_string(),
+            source: "dbo.fact_sales".to_string(),
+            atoms,
+            times: HashMap::new(),
+            slicers: HashMap::new(),
+        },
+    );
+
+    let mut measures = HashMap::new();
+    let mut measure_map = HashMap::new();
+    measure_map.insert(
+        "revenue".to_string(),
+        Measure {
+            name: "revenue".to_string(),
+            expr: SqlExpr {
+                sql: "sum(@revenue)".to_string(),
+                span: Span::default(),
+            },
+            filter: None,
+            null_handling: None,
+        },
+    );
+
+    measures.insert(
+        "fact_sales".to_string(),
+        MeasureBlock {
+            table_name: "fact_sales".to_string(),
+            measures: measure_map,
+        },
+    );
+
+    let model = Model {
+        defaults: None,
+        calendars: HashMap::new(),
+        dimensions: HashMap::new(),
+        tables,
+        measures,
+        reports: HashMap::new(),
+    };
+
+    let report = Report {
+        name: "test_report".to_string(),
+        from: vec!["fact_sales".to_string()],
+        use_date: vec![],
+        period: None,
+        group: vec![],
+        show: vec![ShowItem::MeasureWithSuffix {
+            name: "revenue".to_string(),
+            suffix: TimeSuffix::PriorWeek,
+            label: Some("Prior Week Revenue".to_string()),
+        }],
+        filters: vec![],
+        sort: vec![],
+        limit: None,
+    };
+
+    let result = translation::translate_report(&report, &model);
+    assert!(result.is_ok());
+
+    let query = result.unwrap();
+    assert_eq!(query.derived.len(), 1);
+
+    // Verify PriorWeek uses PriorWeek, not generic PriorPeriod
+    match &query.derived[0].expression {
+        DerivedExpr::TimeFunction(TimeFunction::PriorWeek { measure, .. }) => {
+            assert_eq!(measure, "revenue", "PriorWeek should use PriorWeek variant");
+        }
+        _ => panic!("Expected PriorWeek to use PriorWeek TimeFunction variant"),
+    }
+}
+
+#[test]
 fn test_malformed_sql_expression() {
     use mantis::dsl::span::Span;
     use mantis::model::{Atom, AtomType, SqlExpr, Table};
