@@ -290,6 +290,24 @@ pub enum TimeFunction {
         via: Option<String>,
     },
 
+    /// Prior month: same period in the prior month.
+    ///
+    /// For monthly grain: `LAG(measure, 1)`
+    /// For daily grain: uses date arithmetic or LAG with appropriate offset
+    PriorMonth {
+        measure: String,
+        via: Option<String>,
+    },
+
+    /// Prior week: same period in the prior week.
+    ///
+    /// For weekly grain: `LAG(measure, 1)`
+    /// For daily grain: `LAG(measure, 7)` or date arithmetic
+    PriorWeek {
+        measure: String,
+        via: Option<String>,
+    },
+
     /// Rolling sum: sum over the last N periods.
     ///
     /// SQL: `SUM(measure) OVER (ORDER BY period ROWS BETWEEN N-1 PRECEDING AND CURRENT ROW)`
@@ -366,6 +384,8 @@ impl TimeFunction {
             Self::PriorPeriod { measure, .. } => measure,
             Self::PriorYear { measure, .. } => measure,
             Self::PriorQuarter { measure, .. } => measure,
+            Self::PriorMonth { measure, .. } => measure,
+            Self::PriorWeek { measure, .. } => measure,
             Self::RollingSum { measure, .. } => measure,
             Self::RollingAvg { measure, .. } => measure,
         }
@@ -381,6 +401,8 @@ impl TimeFunction {
             Self::PriorPeriod { via, .. } => via.as_deref(),
             Self::PriorYear { via, .. } => via.as_deref(),
             Self::PriorQuarter { via, .. } => via.as_deref(),
+            Self::PriorMonth { via, .. } => via.as_deref(),
+            Self::PriorWeek { via, .. } => via.as_deref(),
             Self::RollingSum { via, .. } => via.as_deref(),
             Self::RollingAvg { via, .. } => via.as_deref(),
         }
