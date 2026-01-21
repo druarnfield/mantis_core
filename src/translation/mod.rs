@@ -289,20 +289,13 @@ fn translate_time_suffix(
             day_column: None,
             via: None,
         }),
-        crate::model::TimeSuffix::Wtd => {
-            // TODO: WTD currently uses MonthToDate which is semantically incorrect.
-            // This is a known limitation. Proper implementation requires:
-            // - A WeekToDate TimeFunction variant
-            // - Week boundary logic (week start day from calendar)
-            // - Week number calculations for filtering
-            DerivedExpr::TimeFunction(TimeFunction::MonthToDate {
-                measure: measure_name.to_string(),
-                year_column: None,
-                month_column: None,
-                day_column: None,
-                via: None,
-            })
-        }
+        crate::model::TimeSuffix::Wtd => DerivedExpr::TimeFunction(TimeFunction::WeekToDate {
+            measure: measure_name.to_string(),
+            year_column: None,
+            week_column: None,
+            day_column: None,
+            via: None,
+        }),
         crate::model::TimeSuffix::FiscalYtd => {
             DerivedExpr::TimeFunction(TimeFunction::YearToDate {
                 measure: measure_name.to_string(),
