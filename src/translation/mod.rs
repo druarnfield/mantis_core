@@ -15,8 +15,6 @@
 //! - Filters are compiled but not added to `query.filters` (requires SQL parsing to FieldFilter)
 //! - Period expressions are not yet implemented (requires calendar integration)
 //! - Inline measures require SQL expression parsing to DerivedExpr
-//! - WTD (Week-to-Date) uses MonthToDate as a placeholder
-//! - PriorMonth and PriorWeek lack granularity distinction
 
 use crate::model::{Model, Report};
 use crate::semantic::planner::types::{
@@ -355,18 +353,16 @@ fn translate_time_suffix(
         }
         crate::model::TimeSuffix::MomGrowth => {
             let current = Box::new(DerivedExpr::MeasureRef(measure_name.to_string()));
-            let previous = Box::new(DerivedExpr::TimeFunction(TimeFunction::PriorPeriod {
+            let previous = Box::new(DerivedExpr::TimeFunction(TimeFunction::PriorMonth {
                 measure: measure_name.to_string(),
-                periods_back: 1,
                 via: None,
             }));
             DerivedExpr::Growth { current, previous }
         }
         crate::model::TimeSuffix::WowGrowth => {
             let current = Box::new(DerivedExpr::MeasureRef(measure_name.to_string()));
-            let previous = Box::new(DerivedExpr::TimeFunction(TimeFunction::PriorPeriod {
+            let previous = Box::new(DerivedExpr::TimeFunction(TimeFunction::PriorWeek {
                 measure: measure_name.to_string(),
-                periods_back: 1,
                 via: None,
             }));
             DerivedExpr::Growth { current, previous }
@@ -391,18 +387,16 @@ fn translate_time_suffix(
         }
         crate::model::TimeSuffix::MomDelta => {
             let current = Box::new(DerivedExpr::MeasureRef(measure_name.to_string()));
-            let previous = Box::new(DerivedExpr::TimeFunction(TimeFunction::PriorPeriod {
+            let previous = Box::new(DerivedExpr::TimeFunction(TimeFunction::PriorMonth {
                 measure: measure_name.to_string(),
-                periods_back: 1,
                 via: None,
             }));
             DerivedExpr::Delta { current, previous }
         }
         crate::model::TimeSuffix::WowDelta => {
             let current = Box::new(DerivedExpr::MeasureRef(measure_name.to_string()));
-            let previous = Box::new(DerivedExpr::TimeFunction(TimeFunction::PriorPeriod {
+            let previous = Box::new(DerivedExpr::TimeFunction(TimeFunction::PriorWeek {
                 measure: measure_name.to_string(),
-                periods_back: 1,
                 via: None,
             }));
             DerivedExpr::Delta { current, previous }

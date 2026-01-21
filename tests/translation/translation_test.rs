@@ -714,6 +714,386 @@ fn test_translate_measure_with_ytd_suffix() {
 }
 
 #[test]
+fn test_mom_growth_uses_prior_month() {
+    use mantis::dsl::span::Span;
+    use mantis::model::{
+        Atom, AtomType, Measure, MeasureBlock, ShowItem, SqlExpr, Table, TimeSuffix,
+    };
+    use mantis::semantic::planner::types::{DerivedExpr, TimeFunction};
+
+    let mut tables = HashMap::new();
+    let mut atoms = HashMap::new();
+    atoms.insert(
+        "revenue".to_string(),
+        Atom {
+            name: "revenue".to_string(),
+            data_type: AtomType::Decimal,
+        },
+    );
+
+    tables.insert(
+        "fact_sales".to_string(),
+        Table {
+            name: "fact_sales".to_string(),
+            source: "dbo.fact_sales".to_string(),
+            atoms,
+            times: HashMap::new(),
+            slicers: HashMap::new(),
+        },
+    );
+
+    let mut measures = HashMap::new();
+    let mut measure_map = HashMap::new();
+    measure_map.insert(
+        "revenue".to_string(),
+        Measure {
+            name: "revenue".to_string(),
+            expr: SqlExpr {
+                sql: "sum(@revenue)".to_string(),
+                span: Span::default(),
+            },
+            filter: None,
+            null_handling: None,
+        },
+    );
+
+    measures.insert(
+        "fact_sales".to_string(),
+        MeasureBlock {
+            table_name: "fact_sales".to_string(),
+            measures: measure_map,
+        },
+    );
+
+    let model = Model {
+        defaults: None,
+        calendars: HashMap::new(),
+        dimensions: HashMap::new(),
+        tables,
+        measures,
+        reports: HashMap::new(),
+    };
+
+    let report = Report {
+        name: "test_report".to_string(),
+        from: vec!["fact_sales".to_string()],
+        use_date: vec![],
+        period: None,
+        group: vec![],
+        show: vec![ShowItem::MeasureWithSuffix {
+            name: "revenue".to_string(),
+            suffix: TimeSuffix::MomGrowth,
+            label: Some("MoM Growth".to_string()),
+        }],
+        filters: vec![],
+        sort: vec![],
+        limit: None,
+    };
+
+    let result = translation::translate_report(&report, &model);
+    assert!(result.is_ok());
+
+    let query = result.unwrap();
+    assert_eq!(query.derived.len(), 1);
+
+    // Verify the Growth expression contains PriorMonth, not generic PriorPeriod
+    match &query.derived[0].expression {
+        DerivedExpr::Growth { previous, .. } => match previous.as_ref() {
+            DerivedExpr::TimeFunction(TimeFunction::PriorMonth { .. }) => {
+                // Success - correct variant
+            }
+            _ => panic!("MomGrowth should use PriorMonth for previous value"),
+        },
+        _ => panic!("Expected Growth expression"),
+    }
+}
+
+#[test]
+fn test_wow_growth_uses_prior_week() {
+    use mantis::dsl::span::Span;
+    use mantis::model::{
+        Atom, AtomType, Measure, MeasureBlock, ShowItem, SqlExpr, Table, TimeSuffix,
+    };
+    use mantis::semantic::planner::types::{DerivedExpr, TimeFunction};
+
+    let mut tables = HashMap::new();
+    let mut atoms = HashMap::new();
+    atoms.insert(
+        "revenue".to_string(),
+        Atom {
+            name: "revenue".to_string(),
+            data_type: AtomType::Decimal,
+        },
+    );
+
+    tables.insert(
+        "fact_sales".to_string(),
+        Table {
+            name: "fact_sales".to_string(),
+            source: "dbo.fact_sales".to_string(),
+            atoms,
+            times: HashMap::new(),
+            slicers: HashMap::new(),
+        },
+    );
+
+    let mut measures = HashMap::new();
+    let mut measure_map = HashMap::new();
+    measure_map.insert(
+        "revenue".to_string(),
+        Measure {
+            name: "revenue".to_string(),
+            expr: SqlExpr {
+                sql: "sum(@revenue)".to_string(),
+                span: Span::default(),
+            },
+            filter: None,
+            null_handling: None,
+        },
+    );
+
+    measures.insert(
+        "fact_sales".to_string(),
+        MeasureBlock {
+            table_name: "fact_sales".to_string(),
+            measures: measure_map,
+        },
+    );
+
+    let model = Model {
+        defaults: None,
+        calendars: HashMap::new(),
+        dimensions: HashMap::new(),
+        tables,
+        measures,
+        reports: HashMap::new(),
+    };
+
+    let report = Report {
+        name: "test_report".to_string(),
+        from: vec!["fact_sales".to_string()],
+        use_date: vec![],
+        period: None,
+        group: vec![],
+        show: vec![ShowItem::MeasureWithSuffix {
+            name: "revenue".to_string(),
+            suffix: TimeSuffix::WowGrowth,
+            label: Some("WoW Growth".to_string()),
+        }],
+        filters: vec![],
+        sort: vec![],
+        limit: None,
+    };
+
+    let result = translation::translate_report(&report, &model);
+    assert!(result.is_ok());
+
+    let query = result.unwrap();
+    assert_eq!(query.derived.len(), 1);
+
+    // Verify the Growth expression contains PriorWeek, not generic PriorPeriod
+    match &query.derived[0].expression {
+        DerivedExpr::Growth { previous, .. } => match previous.as_ref() {
+            DerivedExpr::TimeFunction(TimeFunction::PriorWeek { .. }) => {
+                // Success - correct variant
+            }
+            _ => panic!("WowGrowth should use PriorWeek for previous value"),
+        },
+        _ => panic!("Expected Growth expression"),
+    }
+}
+
+#[test]
+fn test_mom_delta_uses_prior_month() {
+    use mantis::dsl::span::Span;
+    use mantis::model::{
+        Atom, AtomType, Measure, MeasureBlock, ShowItem, SqlExpr, Table, TimeSuffix,
+    };
+    use mantis::semantic::planner::types::{DerivedExpr, TimeFunction};
+
+    let mut tables = HashMap::new();
+    let mut atoms = HashMap::new();
+    atoms.insert(
+        "revenue".to_string(),
+        Atom {
+            name: "revenue".to_string(),
+            data_type: AtomType::Decimal,
+        },
+    );
+
+    tables.insert(
+        "fact_sales".to_string(),
+        Table {
+            name: "fact_sales".to_string(),
+            source: "dbo.fact_sales".to_string(),
+            atoms,
+            times: HashMap::new(),
+            slicers: HashMap::new(),
+        },
+    );
+
+    let mut measures = HashMap::new();
+    let mut measure_map = HashMap::new();
+    measure_map.insert(
+        "revenue".to_string(),
+        Measure {
+            name: "revenue".to_string(),
+            expr: SqlExpr {
+                sql: "sum(@revenue)".to_string(),
+                span: Span::default(),
+            },
+            filter: None,
+            null_handling: None,
+        },
+    );
+
+    measures.insert(
+        "fact_sales".to_string(),
+        MeasureBlock {
+            table_name: "fact_sales".to_string(),
+            measures: measure_map,
+        },
+    );
+
+    let model = Model {
+        defaults: None,
+        calendars: HashMap::new(),
+        dimensions: HashMap::new(),
+        tables,
+        measures,
+        reports: HashMap::new(),
+    };
+
+    let report = Report {
+        name: "test_report".to_string(),
+        from: vec!["fact_sales".to_string()],
+        use_date: vec![],
+        period: None,
+        group: vec![],
+        show: vec![ShowItem::MeasureWithSuffix {
+            name: "revenue".to_string(),
+            suffix: TimeSuffix::MomDelta,
+            label: Some("MoM Delta".to_string()),
+        }],
+        filters: vec![],
+        sort: vec![],
+        limit: None,
+    };
+
+    let result = translation::translate_report(&report, &model);
+    assert!(result.is_ok());
+
+    let query = result.unwrap();
+    assert_eq!(query.derived.len(), 1);
+
+    // Verify the Delta expression contains PriorMonth, not generic PriorPeriod
+    match &query.derived[0].expression {
+        DerivedExpr::Delta { previous, .. } => match previous.as_ref() {
+            DerivedExpr::TimeFunction(TimeFunction::PriorMonth { .. }) => {
+                // Success - correct variant
+            }
+            _ => panic!("MomDelta should use PriorMonth for previous value"),
+        },
+        _ => panic!("Expected Delta expression"),
+    }
+}
+
+#[test]
+fn test_wow_delta_uses_prior_week() {
+    use mantis::dsl::span::Span;
+    use mantis::model::{
+        Atom, AtomType, Measure, MeasureBlock, ShowItem, SqlExpr, Table, TimeSuffix,
+    };
+    use mantis::semantic::planner::types::{DerivedExpr, TimeFunction};
+
+    let mut tables = HashMap::new();
+    let mut atoms = HashMap::new();
+    atoms.insert(
+        "revenue".to_string(),
+        Atom {
+            name: "revenue".to_string(),
+            data_type: AtomType::Decimal,
+        },
+    );
+
+    tables.insert(
+        "fact_sales".to_string(),
+        Table {
+            name: "fact_sales".to_string(),
+            source: "dbo.fact_sales".to_string(),
+            atoms,
+            times: HashMap::new(),
+            slicers: HashMap::new(),
+        },
+    );
+
+    let mut measures = HashMap::new();
+    let mut measure_map = HashMap::new();
+    measure_map.insert(
+        "revenue".to_string(),
+        Measure {
+            name: "revenue".to_string(),
+            expr: SqlExpr {
+                sql: "sum(@revenue)".to_string(),
+                span: Span::default(),
+            },
+            filter: None,
+            null_handling: None,
+        },
+    );
+
+    measures.insert(
+        "fact_sales".to_string(),
+        MeasureBlock {
+            table_name: "fact_sales".to_string(),
+            measures: measure_map,
+        },
+    );
+
+    let model = Model {
+        defaults: None,
+        calendars: HashMap::new(),
+        dimensions: HashMap::new(),
+        tables,
+        measures,
+        reports: HashMap::new(),
+    };
+
+    let report = Report {
+        name: "test_report".to_string(),
+        from: vec!["fact_sales".to_string()],
+        use_date: vec![],
+        period: None,
+        group: vec![],
+        show: vec![ShowItem::MeasureWithSuffix {
+            name: "revenue".to_string(),
+            suffix: TimeSuffix::WowDelta,
+            label: Some("WoW Delta".to_string()),
+        }],
+        filters: vec![],
+        sort: vec![],
+        limit: None,
+    };
+
+    let result = translation::translate_report(&report, &model);
+    assert!(result.is_ok());
+
+    let query = result.unwrap();
+    assert_eq!(query.derived.len(), 1);
+
+    // Verify the Delta expression contains PriorWeek, not generic PriorPeriod
+    match &query.derived[0].expression {
+        DerivedExpr::Delta { previous, .. } => match previous.as_ref() {
+            DerivedExpr::TimeFunction(TimeFunction::PriorWeek { .. }) => {
+                // Success - correct variant
+            }
+            _ => panic!("WowDelta should use PriorWeek for previous value"),
+        },
+        _ => panic!("Expected Delta expression"),
+    }
+}
+
+#[test]
 fn test_wtd_uses_correct_time_function() {
     use mantis::dsl::span::Span;
     use mantis::model::{
