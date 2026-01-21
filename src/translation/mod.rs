@@ -331,14 +331,10 @@ fn translate_time_suffix(
                 via: None,
             })
         }
-        crate::model::TimeSuffix::PriorWeek => {
-            // TODO: See PriorMonth comment above - same limitation applies here.
-            DerivedExpr::TimeFunction(TimeFunction::PriorPeriod {
-                measure: measure_name.to_string(),
-                periods_back: 1,
-                via: None,
-            })
-        }
+        crate::model::TimeSuffix::PriorWeek => DerivedExpr::TimeFunction(TimeFunction::PriorWeek {
+            measure: measure_name.to_string(),
+            via: None,
+        }),
 
         // Growth calculations
         crate::model::TimeSuffix::YoyGrowth => {
