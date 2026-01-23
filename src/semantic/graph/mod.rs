@@ -3,8 +3,10 @@
 //! This module replaces the dual-graph architecture (ModelGraph + ColumnLineageGraph)
 //! with a unified graph where all semantic elements are first-class nodes.
 
+mod builder;
 pub mod types;
 
+pub use builder::{GraphBuildError, GraphBuildResult};
 pub use types::*;
 
 use petgraph::graph::{DiGraph, NodeIndex};
@@ -64,3 +66,6 @@ impl Default for UnifiedGraph {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests;
