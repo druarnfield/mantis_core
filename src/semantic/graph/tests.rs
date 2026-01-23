@@ -773,3 +773,120 @@ fn test_create_depends_on_edges() {
     assert!(referenced_columns.contains(&"sales.quantity".to_string()));
     assert!(referenced_columns.contains(&"sales.amount".to_string()));
 }
+
+#[test]
+fn test_find_path() {
+    // Create a model with 3 entities: sales -> customers -> regions
+    let model = Model {
+        defaults: None,
+        items: vec![
+            spanned(Item::Table(Table {
+                name: spanned("sales".to_string()),
+                source: spanned("dbo.fact_sales".to_string()),
+                atoms: vec![
+                    spanned(Atom {
+                        name: spanned("amount".to_string()),
+                        atom_type: spanned(AtomType::Decimal),
+                    }),
+                    spanned(Atom {
+                        name: spanned("customer_id".to_string()),
+                        atom_type: spanned(AtomType::Int),
+                    }),
+                ],
+                times: vec![],
+                slicers: vec![],
+            })),
+            spanned(Item::Dimension(Dimension {
+                name: spanned("customers".to_string()),
+                source: spanned("dbo.dim_customers".to_string()),
+                key: spanned("customer_id".to_string()),
+                attributes: vec![
+                    spanned(Attribute {
+                        name: spanned("name".to_string()),
+                        data_type: spanned(DataType::String),
+                    }),
+                    spanned(Attribute {
+                        name: spanned("region_id".to_string()),
+                        data_type: spanned(DataType::Int),
+                    }),
+                ],
+                drill_paths: vec![],
+            })),
+            spanned(Item::Dimension(Dimension {
+                name: spanned("regions".to_string()),
+                source: spanned("dbo.dim_regions".to_string()),
+                key: spanned("region_id".to_string()),
+                attributes: vec![spanned(Attribute {
+                    name: spanned("region_name".to_string()),
+                    data_type: spanned(DataType::String),
+                })],
+                drill_paths: vec![],
+            })),
+        ],
+    };
+
+    // Create relationships: sales -> customers -> regions
+    let relationships = vec![
+        InferredRelationship {
+            from_schema: "dbo".to_string(),
+            from_table: "sales".to_string(),
+            from_column: "customer_id".to_string(),
+            to_schema: "dbo".to_string(),
+            to_table: "customers".to_string(),
+            to_column: "customer_id".to_string(),
+            confidence: 0.95,
+            rule: "naming_convention".to_string(),
+            cardinality: Cardinality::ManyToOne,
+            signal_breakdown: None,
+            source: RelationshipSource::Inferred,
+        },
+        InferredRelationship {
+            from_schema: "dbo".to_string(),
+            from_table: "customers".to_string(),
+            from_column: "region_id".to_string(),
+            to_schema: "dbo".to_string(),
+            to_table: "regions".to_string(),
+            to_column: "region_id".to_string(),
+            confidence: 0.95,
+            rule: "naming_convention".to_string(),
+            cardinality: Cardinality::ManyToOne,
+            signal_breakdown: None,
+            source: RelationshipSource::Inferred,
+        },
+    ];
+
+    let stats: HashMap<(String, String), ColumnStats> = HashMap::new();
+
+    let graph = UnifiedGraph::from_model_with_inference(&model, &relationships, &stats)
+        .expect("Failed to build graph");
+
+    // Test finding a 2-hop path: sales -> customers -> regions
+    let path = graph
+        .find_path("sales", "regions")
+        .expect("Failed to find path");
+
+    // Should have 2 steps (sales -> customers, customers -> regions)
+    assert_eq!(path.steps.len(), 2);
+
+    // Verify first step: sales -> customers
+    assert_eq!(path.steps[0].from, "sales");
+    assert_eq!(path.steps[0].to, "customers");
+    assert_eq!(path.steps[0].cardinality, "N:1"); // ManyToOne
+
+    // Verify second step: customers -> regions
+    assert_eq!(path.steps[1].from, "customers");
+    assert_eq!(path.steps[1].to, "regions");
+    assert_eq!(path.steps[1].cardinality, "N:1"); // ManyToOne
+
+    // Test direct path: sales -> customers
+    let direct_path = graph
+        .find_path("sales", "customers")
+        .expect("Failed to find direct path");
+    assert_eq!(direct_path.steps.len(), 1);
+    assert_eq!(direct_path.steps[0].from, "sales");
+    assert_eq!(direct_path.steps[0].to, "customers");
+
+    // Test no path to non-existent entity
+    let no_path = graph.find_path("sales", "nonexistent");
+    assert!(no_path.is_err());
+}

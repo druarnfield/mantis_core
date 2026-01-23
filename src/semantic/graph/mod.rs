@@ -4,6 +4,7 @@
 //! with a unified graph where all semantic elements are first-class nodes.
 
 mod builder;
+pub mod query;
 pub mod types;
 
 pub use builder::{GraphBuildError, GraphBuildResult};
