@@ -5,14 +5,31 @@
 
 use std::collections::HashMap;
 
+use once_cell::sync::Lazy;
+use regex::Regex;
+
 use crate::dsl::ast::{CalendarBody, Item, Model};
 use crate::metadata::ColumnStats;
 use crate::semantic::inference::InferredRelationship;
 
 use super::{
-    BelongsToEdge, CalendarNode, ColumnNode, DataType, EntityNode, EntityType, GraphEdge,
-    GraphNode, MeasureNode, SizeCategory, UnifiedGraph,
+    BelongsToEdge, CalendarNode, ColumnNode, DataType, DependsOnEdge, EntityNode, EntityType,
+    GraphEdge, GraphNode, JoinsToEdge, MeasureNode, ReferencesEdge, RelationshipSource,
+    SizeCategory, UnifiedGraph,
 };
+
+/// Convert inference RelationshipSource to graph RelationshipSource.
+fn convert_relationship_source(
+    source: crate::semantic::inference::RelationshipSource,
+) -> RelationshipSource {
+    match source {
+        crate::semantic::inference::RelationshipSource::DatabaseConstraint => {
+            RelationshipSource::ForeignKey
+        }
+        crate::semantic::inference::RelationshipSource::Inferred => RelationshipSource::Statistical,
+        crate::semantic::inference::RelationshipSource::UserDefined => RelationshipSource::Explicit,
+    }
+}
 
 // ============================================================================
 // Error Types
@@ -434,31 +451,142 @@ impl UnifiedGraph {
 impl UnifiedGraph {
     /// Create REFERENCES edges from inferred relationships.
     ///
-    /// This will be implemented in Task 3 (Phase 2).
+    /// Iterates through all inferred relationships and creates a REFERENCES edge
+    /// for each column-to-column FK relationship.
     pub(crate) fn create_references_edges(
         &mut self,
-        _relationships: &[InferredRelationship],
+        relationships: &[InferredRelationship],
     ) -> GraphBuildResult<()> {
-        // TODO: Implement in Task 3
+        for rel in relationships {
+            // Build qualified column names
+            let from_col = format!("{}.{}", rel.from_table, rel.from_column);
+            let to_col = format!("{}.{}", rel.to_table, rel.to_column);
+
+            // Look up column nodes
+            let from_idx = self
+                .column_index
+                .get(&from_col)
+                .ok_or_else(|| GraphBuildError::ColumnNotFound(from_col.clone()))?;
+            let to_idx = self
+                .column_index
+                .get(&to_col)
+                .ok_or_else(|| GraphBuildError::ColumnNotFound(to_col.clone()))?;
+
+            // Create REFERENCES edge with metadata
+            let edge = GraphEdge::References(ReferencesEdge {
+                from_column: from_col,
+                to_column: to_col,
+                source: convert_relationship_source(rel.source),
+            });
+
+            self.graph.add_edge(*from_idx, *to_idx, edge);
+        }
+
         Ok(())
     }
 
     /// Create JOINS_TO edges from inferred relationships.
     ///
-    /// This will be implemented in Task 3 (Phase 2).
+    /// Groups REFERENCES edges by entity pair and creates a JOINS_TO edge
+    /// for each unique entity-to-entity relationship.
     pub(crate) fn create_joins_to_edges(
         &mut self,
-        _relationships: &[InferredRelationship],
+        relationships: &[InferredRelationship],
     ) -> GraphBuildResult<()> {
-        // TODO: Implement in Task 3
+        // Group relationships by entity pair
+        let mut entity_joins: HashMap<(String, String), Vec<&InferredRelationship>> =
+            HashMap::new();
+
+        for rel in relationships {
+            let key = (rel.from_table.clone(), rel.to_table.clone());
+            entity_joins.entry(key).or_default().push(rel);
+        }
+
+        // Create JOINS_TO edges for each entity pair
+        for ((from_entity, to_entity), rels) in entity_joins {
+            // Look up entity nodes
+            let from_idx = self
+                .entity_index
+                .get(&from_entity)
+                .ok_or_else(|| GraphBuildError::EntityNotFound(from_entity.clone()))?;
+            let to_idx = self
+                .entity_index
+                .get(&to_entity)
+                .ok_or_else(|| GraphBuildError::EntityNotFound(to_entity.clone()))?;
+
+            // Collect join columns
+            let join_columns: Vec<(String, String)> = rels
+                .iter()
+                .map(|rel| (rel.from_column.clone(), rel.to_column.clone()))
+                .collect();
+
+            // Use the best (highest confidence) relationship's properties
+            let best_rel = rels
+                .iter()
+                .max_by(|a, b| a.confidence.partial_cmp(&b.confidence).unwrap())
+                .unwrap();
+
+            let edge = GraphEdge::JoinsTo(JoinsToEdge {
+                from_entity,
+                to_entity,
+                join_columns,
+                cardinality: best_rel.cardinality,
+                source: convert_relationship_source(best_rel.source),
+            });
+
+            self.graph.add_edge(*from_idx, *to_idx, edge);
+        }
+
         Ok(())
     }
 
     /// Create DEPENDS_ON edges from measure definitions.
     ///
-    /// This will be implemented in Task 3 (Phase 2).
-    pub(crate) fn create_depends_on_edges(&mut self, _model: &Model) -> GraphBuildResult<()> {
-        // TODO: Implement in Task 3
+    /// Parses measure SQL expressions to find atom references (using @atom_name pattern)
+    /// and creates DEPENDS_ON edges from measures to the columns they reference.
+    pub(crate) fn create_depends_on_edges(&mut self, model: &Model) -> GraphBuildResult<()> {
+        // Regex to match atom references: @atom_name
+        static ATOM_PATTERN: Lazy<Regex> = Lazy::new(|| Regex::new(r"@(\w+)").unwrap());
+
+        for item in &model.items {
+            if let Item::MeasureBlock(measure_block) = &item.value {
+                let entity_name = &measure_block.table.value;
+
+                for measure in &measure_block.measures {
+                    let measure_name = &measure.value.name.value;
+                    let qualified_measure = format!("{}.{}", entity_name, measure_name);
+
+                    // Get measure node
+                    let measure_idx =
+                        self.measure_index.get(&qualified_measure).ok_or_else(|| {
+                            GraphBuildError::InvalidReference(qualified_measure.clone())
+                        })?;
+
+                    // Parse SQL expression for atom references
+                    let sql = &measure.value.expr.value.sql;
+                    let mut referenced_columns = Vec::new();
+
+                    for cap in ATOM_PATTERN.captures_iter(sql) {
+                        let atom_name = &cap[1];
+                        let qualified_col = format!("{}.{}", entity_name, atom_name);
+
+                        // Verify the column exists
+                        if let Some(col_idx) = self.column_index.get(&qualified_col) {
+                            referenced_columns.push(qualified_col.clone());
+
+                            // Create DEPENDS_ON edge from measure to column
+                            let edge = GraphEdge::DependsOn(DependsOnEdge {
+                                measure: qualified_measure.clone(),
+                                columns: vec![qualified_col],
+                            });
+
+                            self.graph.add_edge(*measure_idx, *col_idx, edge);
+                        }
+                    }
+                }
+            }
+        }
+
         Ok(())
     }
 }

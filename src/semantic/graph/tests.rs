@@ -8,9 +8,9 @@ use crate::dsl::ast::{
 };
 use crate::dsl::span::{Span, Spanned};
 use crate::metadata::ColumnStats;
-use crate::semantic::inference::InferredRelationship;
+use crate::semantic::inference::{InferredRelationship, RelationshipSource};
 
-use super::{EntityType, GraphNode, SizeCategory, UnifiedGraph};
+use super::{Cardinality, EntityType, GraphEdge, GraphNode, SizeCategory, UnifiedGraph};
 
 /// Helper to create a spanned value.
 fn spanned<T>(value: T) -> Spanned<T> {
@@ -439,4 +439,337 @@ fn test_size_categories() {
     if let GraphNode::Entity(entity) = &graph.graph[graph.entity_index["large_table"]] {
         assert_eq!(entity.size_category, SizeCategory::Large);
     }
+}
+
+#[test]
+fn test_create_references_edges() {
+    // Create a model with sales fact table and customers dimension
+    let model = Model {
+        defaults: None,
+        items: vec![
+            spanned(Item::Table(Table {
+                name: spanned("sales".to_string()),
+                source: spanned("dbo.fact_sales".to_string()),
+                atoms: vec![
+                    spanned(Atom {
+                        name: spanned("amount".to_string()),
+                        atom_type: spanned(AtomType::Decimal),
+                    }),
+                    spanned(Atom {
+                        name: spanned("customer_id".to_string()),
+                        atom_type: spanned(AtomType::Int),
+                    }),
+                ],
+                times: vec![],
+                slicers: vec![],
+            })),
+            spanned(Item::Dimension(Dimension {
+                name: spanned("customers".to_string()),
+                source: spanned("dbo.dim_customers".to_string()),
+                key: spanned("customer_id".to_string()),
+                attributes: vec![spanned(Attribute {
+                    name: spanned("name".to_string()),
+                    data_type: spanned(DataType::String),
+                })],
+                drill_paths: vec![],
+            })),
+        ],
+    };
+
+    // Create an inferred relationship: sales.customer_id -> customers.customer_id
+    let relationships = vec![InferredRelationship {
+        from_schema: "dbo".to_string(),
+        from_table: "sales".to_string(),
+        from_column: "customer_id".to_string(),
+        to_schema: "dbo".to_string(),
+        to_table: "customers".to_string(),
+        to_column: "customer_id".to_string(),
+        confidence: 0.95,
+        rule: "naming_convention".to_string(),
+        cardinality: Cardinality::ManyToOne,
+        signal_breakdown: None,
+        source: RelationshipSource::Inferred,
+    }];
+
+    let stats: HashMap<(String, String), ColumnStats> = HashMap::new();
+
+    let graph = UnifiedGraph::from_model_with_inference(&model, &relationships, &stats)
+        .expect("Failed to build graph");
+
+    // Verify that REFERENCES edge was created
+    let from_col_idx = graph
+        .column_index
+        .get("sales.customer_id")
+        .expect("From column not found");
+    let to_col_idx = graph
+        .column_index
+        .get("customers.customer_id")
+        .expect("To column not found");
+
+    // Check that there's an edge between these columns
+    let edges: Vec<_> = graph
+        .graph
+        .edges_connecting(*from_col_idx, *to_col_idx)
+        .collect();
+    assert_eq!(edges.len(), 1, "Expected one REFERENCES edge");
+
+    // Verify edge properties
+    if let GraphEdge::References(ref_edge) = edges[0].weight() {
+        assert_eq!(ref_edge.from_column, "sales.customer_id");
+        assert_eq!(ref_edge.to_column, "customers.customer_id");
+        assert_eq!(
+            ref_edge.source,
+            super::RelationshipSource::Statistical,
+            "Expected converted source"
+        );
+    } else {
+        panic!("Expected REFERENCES edge");
+    }
+}
+
+#[test]
+fn test_create_joins_to_edges() {
+    // Create a model with multiple tables and relationships
+    let model = Model {
+        defaults: None,
+        items: vec![
+            spanned(Item::Table(Table {
+                name: spanned("sales".to_string()),
+                source: spanned("dbo.fact_sales".to_string()),
+                atoms: vec![
+                    spanned(Atom {
+                        name: spanned("amount".to_string()),
+                        atom_type: spanned(AtomType::Decimal),
+                    }),
+                    spanned(Atom {
+                        name: spanned("customer_id".to_string()),
+                        atom_type: spanned(AtomType::Int),
+                    }),
+                    spanned(Atom {
+                        name: spanned("product_id".to_string()),
+                        atom_type: spanned(AtomType::Int),
+                    }),
+                ],
+                times: vec![],
+                slicers: vec![],
+            })),
+            spanned(Item::Dimension(Dimension {
+                name: spanned("customers".to_string()),
+                source: spanned("dbo.dim_customers".to_string()),
+                key: spanned("customer_id".to_string()),
+                attributes: vec![],
+                drill_paths: vec![],
+            })),
+            spanned(Item::Dimension(Dimension {
+                name: spanned("products".to_string()),
+                source: spanned("dbo.dim_products".to_string()),
+                key: spanned("product_id".to_string()),
+                attributes: vec![],
+                drill_paths: vec![],
+            })),
+        ],
+    };
+
+    // Create inferred relationships
+    let relationships = vec![
+        InferredRelationship {
+            from_schema: "dbo".to_string(),
+            from_table: "sales".to_string(),
+            from_column: "customer_id".to_string(),
+            to_schema: "dbo".to_string(),
+            to_table: "customers".to_string(),
+            to_column: "customer_id".to_string(),
+            confidence: 0.95,
+            rule: "naming_convention".to_string(),
+            cardinality: Cardinality::ManyToOne,
+            signal_breakdown: None,
+            source: RelationshipSource::Inferred,
+        },
+        InferredRelationship {
+            from_schema: "dbo".to_string(),
+            from_table: "sales".to_string(),
+            from_column: "product_id".to_string(),
+            to_schema: "dbo".to_string(),
+            to_table: "products".to_string(),
+            to_column: "product_id".to_string(),
+            confidence: 0.98,
+            rule: "foreign_key".to_string(),
+            cardinality: Cardinality::ManyToOne,
+            signal_breakdown: None,
+            source: RelationshipSource::DatabaseConstraint,
+        },
+    ];
+
+    let stats: HashMap<(String, String), ColumnStats> = HashMap::new();
+
+    let graph = UnifiedGraph::from_model_with_inference(&model, &relationships, &stats)
+        .expect("Failed to build graph");
+
+    // Verify that JOINS_TO edges were created
+    let sales_idx = graph.entity_index.get("sales").expect("Sales not found");
+    let customers_idx = graph
+        .entity_index
+        .get("customers")
+        .expect("Customers not found");
+    let products_idx = graph
+        .entity_index
+        .get("products")
+        .expect("Products not found");
+
+    // Check sales -> customers join
+    let sales_to_customers: Vec<_> = graph
+        .graph
+        .edges_connecting(*sales_idx, *customers_idx)
+        .collect();
+    assert_eq!(
+        sales_to_customers.len(),
+        1,
+        "Expected one JOINS_TO edge to customers"
+    );
+
+    if let GraphEdge::JoinsTo(join_edge) = sales_to_customers[0].weight() {
+        assert_eq!(join_edge.from_entity, "sales");
+        assert_eq!(join_edge.to_entity, "customers");
+        assert_eq!(join_edge.join_columns.len(), 1);
+        assert_eq!(join_edge.join_columns[0].0, "customer_id");
+        assert_eq!(join_edge.join_columns[0].1, "customer_id");
+        assert_eq!(join_edge.cardinality, Cardinality::ManyToOne);
+    } else {
+        panic!("Expected JOINS_TO edge");
+    }
+
+    // Check sales -> products join
+    let sales_to_products: Vec<_> = graph
+        .graph
+        .edges_connecting(*sales_idx, *products_idx)
+        .collect();
+    assert_eq!(
+        sales_to_products.len(),
+        1,
+        "Expected one JOINS_TO edge to products"
+    );
+
+    if let GraphEdge::JoinsTo(join_edge) = sales_to_products[0].weight() {
+        assert_eq!(join_edge.from_entity, "sales");
+        assert_eq!(join_edge.to_entity, "products");
+        assert_eq!(join_edge.cardinality, Cardinality::ManyToOne);
+        // This should use the FK constraint source (higher confidence)
+        assert_eq!(join_edge.source, super::RelationshipSource::ForeignKey);
+    } else {
+        panic!("Expected JOINS_TO edge");
+    }
+}
+
+#[test]
+fn test_create_depends_on_edges() {
+    // Create a model with measures that reference atoms
+    let model = Model {
+        defaults: None,
+        items: vec![
+            spanned(Item::Table(Table {
+                name: spanned("sales".to_string()),
+                source: spanned("dbo.fact_sales".to_string()),
+                atoms: vec![
+                    spanned(Atom {
+                        name: spanned("quantity".to_string()),
+                        atom_type: spanned(AtomType::Int),
+                    }),
+                    spanned(Atom {
+                        name: spanned("amount".to_string()),
+                        atom_type: spanned(AtomType::Decimal),
+                    }),
+                ],
+                times: vec![],
+                slicers: vec![],
+            })),
+            spanned(Item::MeasureBlock(MeasureBlock {
+                table: spanned("sales".to_string()),
+                measures: vec![
+                    spanned(Measure {
+                        name: spanned("total_quantity".to_string()),
+                        expr: spanned(SqlExpr::new("SUM(@quantity)".to_string(), Span::new(0, 0))),
+                        filter: None,
+                        null_handling: None,
+                    }),
+                    spanned(Measure {
+                        name: spanned("total_amount".to_string()),
+                        expr: spanned(SqlExpr::new("SUM(@amount)".to_string(), Span::new(0, 0))),
+                        filter: None,
+                        null_handling: None,
+                    }),
+                    spanned(Measure {
+                        name: spanned("avg_price".to_string()),
+                        expr: spanned(SqlExpr::new(
+                            "SUM(@amount) / SUM(@quantity)".to_string(),
+                            Span::new(0, 0),
+                        )),
+                        filter: None,
+                        null_handling: None,
+                    }),
+                ],
+            })),
+        ],
+    };
+
+    let relationships: Vec<InferredRelationship> = vec![];
+    let stats: HashMap<(String, String), ColumnStats> = HashMap::new();
+
+    let graph = UnifiedGraph::from_model_with_inference(&model, &relationships, &stats)
+        .expect("Failed to build graph");
+
+    // Verify DEPENDS_ON edges were created
+    let total_quantity_idx = graph
+        .measure_index
+        .get("sales.total_quantity")
+        .expect("Measure not found");
+    let quantity_col_idx = graph
+        .column_index
+        .get("sales.quantity")
+        .expect("Column not found");
+
+    // Check total_quantity -> quantity dependency
+    let deps: Vec<_> = graph
+        .graph
+        .edges_connecting(*total_quantity_idx, *quantity_col_idx)
+        .collect();
+    assert_eq!(deps.len(), 1, "Expected one DEPENDS_ON edge");
+
+    if let GraphEdge::DependsOn(dep_edge) = deps[0].weight() {
+        assert_eq!(dep_edge.measure, "sales.total_quantity");
+        assert_eq!(dep_edge.columns.len(), 1);
+        assert_eq!(dep_edge.columns[0], "sales.quantity");
+    } else {
+        panic!("Expected DEPENDS_ON edge");
+    }
+
+    // Verify avg_price has edges to both quantity and amount
+    let avg_price_idx = graph
+        .measure_index
+        .get("sales.avg_price")
+        .expect("Measure not found");
+    let amount_col_idx = graph
+        .column_index
+        .get("sales.amount")
+        .expect("Column not found");
+
+    // Check dependencies
+    let outgoing_edges: Vec<_> = graph
+        .graph
+        .edges_directed(*avg_price_idx, petgraph::Direction::Outgoing)
+        .collect();
+    assert_eq!(
+        outgoing_edges.len(),
+        2,
+        "Expected two DEPENDS_ON edges for avg_price"
+    );
+
+    // Verify both columns are referenced
+    let mut referenced_columns = vec![];
+    for edge in outgoing_edges {
+        if let GraphEdge::DependsOn(dep_edge) = edge.weight() {
+            referenced_columns.extend(dep_edge.columns.clone());
+        }
+    }
+    assert!(referenced_columns.contains(&"sales.quantity".to_string()));
+    assert!(referenced_columns.contains(&"sales.amount".to_string()));
 }
