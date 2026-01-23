@@ -3,7 +3,6 @@
 //! This module defines all node types, edge types, and supporting enums
 //! for the unified graph architecture that replaces ModelGraph + ColumnLineageGraph.
 
-use petgraph::graph::NodeIndex;
 use std::collections::HashMap;
 
 // ============================================================================
@@ -71,6 +70,17 @@ impl Cardinality {
             (false, true) => Cardinality::ManyToOne,
             (false, false) => Cardinality::ManyToMany,
         }
+    }
+
+    /// Returns true if this cardinality can cause row multiplication.
+    /// One-to-many and many-to-many can fan out.
+    pub fn causes_fanout(&self) -> bool {
+        matches!(self, Cardinality::OneToMany | Cardinality::ManyToMany)
+    }
+
+    /// Returns true if the cardinality is known (not Unknown).
+    pub fn is_known(&self) -> bool {
+        !matches!(self, Cardinality::Unknown)
     }
 }
 
