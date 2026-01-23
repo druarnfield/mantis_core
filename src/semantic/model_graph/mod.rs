@@ -23,7 +23,8 @@ use std::collections::HashMap;
 
 use petgraph::graph::{DiGraph, NodeIndex};
 
-use crate::model::{Cardinality, Model};
+use crate::model::Model;
+use crate::semantic::graph::Cardinality;
 
 // Re-export error types from the unified error module
 pub use super::error::{SemanticError, SemanticResult};
@@ -398,11 +399,8 @@ impl ModelGraph {
             let fact_idx = node_indices.get(fact_name).unwrap();
 
             // Collect unique source entities from grain with their PK columns
-            let grain_entities: std::collections::HashSet<_> = fact
-                .grain
-                .iter()
-                .map(|g| g.source_entity.clone())
-                .collect();
+            let grain_entities: std::collections::HashSet<_> =
+                fact.grain.iter().map(|g| g.source_entity.clone()).collect();
 
             // Get the primary grain column (for simple single-entity grain)
             let primary_grain_column = fact
@@ -745,13 +743,15 @@ impl ModelGraph {
         relationship: crate::model::Relationship,
     ) -> GraphResult<bool> {
         // Check if entities exist
-        let from_idx = self.node_indices.get(&relationship.from_entity).ok_or_else(|| {
-            GraphError::UnknownEntity(relationship.from_entity.clone())
-        })?;
+        let from_idx = self
+            .node_indices
+            .get(&relationship.from_entity)
+            .ok_or_else(|| GraphError::UnknownEntity(relationship.from_entity.clone()))?;
 
-        let to_idx = self.node_indices.get(&relationship.to_entity).ok_or_else(|| {
-            GraphError::UnknownEntity(relationship.to_entity.clone())
-        })?;
+        let to_idx = self
+            .node_indices
+            .get(&relationship.to_entity)
+            .ok_or_else(|| GraphError::UnknownEntity(relationship.to_entity.clone()))?;
 
         // Check for duplicate relationship
         let exists = self.model.relationships.iter().any(|r| {

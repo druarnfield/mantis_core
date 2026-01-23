@@ -16,6 +16,9 @@ pub use report::{GroupItem, PeriodExpr, Report, ShowItem, SortDirection, SortIte
 pub use table::{Atom, Slicer, SqlExpr, Table, TimeBinding};
 pub use types::{AtomType, DataType, GrainLevel, Month, NullHandling, Weekday};
 
+// Re-export Cardinality from semantic graph for backward compatibility
+pub use crate::semantic::graph::Cardinality;
+
 use std::collections::HashMap;
 
 /// The new DSL-first semantic model.

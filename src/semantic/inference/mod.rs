@@ -103,7 +103,7 @@ impl std::fmt::Display for RelationshipSource {
 }
 
 // Re-export Cardinality from model for use in inference
-pub use crate::model::Cardinality;
+pub use crate::semantic::graph::Cardinality;
 
 /// An inferred relationship between two tables.
 #[derive(Debug, Clone)]
@@ -181,7 +181,12 @@ impl RelationshipKey {
     /// Create a key from an inferred relationship.
     #[must_use]
     pub fn from_relationship(rel: &InferredRelationship) -> Self {
-        Self::new(&rel.from_table, &rel.from_column, &rel.to_table, &rel.to_column)
+        Self::new(
+            &rel.from_table,
+            &rel.from_column,
+            &rel.to_table,
+            &rel.to_column,
+        )
     }
 
     /// Get the reversed key (swapping from/to).

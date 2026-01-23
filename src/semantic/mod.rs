@@ -19,13 +19,14 @@
 pub mod column_lineage;
 pub mod error;
 pub mod executor;
+pub mod graph;
 pub mod inference;
 pub mod model_graph;
 pub mod planner;
 pub mod semantic_model;
 
-// Re-export Cardinality from model (canonical source)
-pub use crate::model::Cardinality;
+// Re-export Cardinality from graph (new unified location)
+pub use graph::Cardinality;
 
 // Re-export SemanticModel (primary entry point)
 pub use semantic_model::SemanticModel;
@@ -37,8 +38,8 @@ pub use error::{GraphError, GraphResult, PlanError, PlanResult};
 
 // Re-export column lineage types
 pub use column_lineage::{
-    ColumnLineageGraph, ColumnRef, LineageCycleError, LineageEdge, LineageType,
-    SerializedEdge, SerializedLineage,
+    ColumnLineageGraph, ColumnRef, LineageCycleError, LineageEdge, LineageType, SerializedEdge,
+    SerializedLineage,
 };
 
 // Re-export model graph types (primary graph implementation)
@@ -50,13 +51,32 @@ pub use model_graph::{
 // Re-export planner types
 pub use planner::{
     // Query types
-    DerivedBinaryOp, DerivedExpr, DerivedField, FieldFilter, FieldRef, FilterOp, FilterValue,
-    OrderField, SelectField, SemanticQuery, TimeFunction,
-    // Planner
-    PlanPhases, QueryPlanner,
+    DerivedBinaryOp,
+    DerivedExpr,
+    DerivedField,
     // Phase types (for advanced usage)
-    Emitter, LogicalPlan, LogicalPlanner, ResolvedColumn, ResolvedMeasure, ResolvedQuery,
-    ResolvedSelect, Resolver, TimeEmitter, ValidatedQuery, Validator,
+    Emitter,
+    FieldFilter,
+    FieldRef,
+    FilterOp,
+    FilterValue,
+    LogicalPlan,
+    LogicalPlanner,
+    OrderField,
+    // Planner
+    PlanPhases,
+    QueryPlanner,
+    ResolvedColumn,
+    ResolvedMeasure,
+    ResolvedQuery,
+    ResolvedSelect,
+    Resolver,
+    SelectField,
+    SemanticQuery,
+    TimeEmitter,
+    TimeFunction,
+    ValidatedQuery,
+    Validator,
 };
 
 // Re-export executor
