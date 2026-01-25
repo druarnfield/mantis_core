@@ -176,12 +176,12 @@ impl GraphCache {
     }
 
     /// Get cache statistics.
-    pub fn stats(&self) -> CacheResult<CacheStats> {
+    pub fn stats(&self) -> CacheResult<GraphCacheStats> {
         let graph_entries = self.storage.keys_with_prefix("graph:")?.len();
         let inference_entries = self.storage.keys_with_prefix("inference:")?.len();
         let overall = self.storage.stats()?;
 
-        Ok(CacheStats {
+        Ok(GraphCacheStats {
             graph_entries,
             inference_entries,
             total_size_bytes: overall.total_size_bytes,
@@ -217,9 +217,9 @@ impl GraphCache {
     }
 }
 
-/// Statistics about cache usage.
+/// Statistics about graph cache usage.
 #[derive(Debug, Clone)]
-pub struct CacheStats {
+pub struct GraphCacheStats {
     /// Number of graph cache entries
     pub graph_entries: usize,
     /// Number of inference cache entries

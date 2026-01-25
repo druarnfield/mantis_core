@@ -1,22 +1,73 @@
-//! SQLite-based metadata cache.
+//! SQLite-based metadata and graph cache.
 //!
-//! Provides persistent caching of database metadata to avoid repeated
-//! introspection calls. The cache is stored in `~/.mantis/cache.db`.
+//! Provides persistent caching of database metadata and semantic graphs
+//! to avoid repeated introspection and graph construction.
 //!
-//! # Design
+//! # Components
 //!
-//! - Simple key-value store with JSON values
-//! - No TTL - cache persists until manually cleared
-//! - Versioned - auto-clears on version mismatch
+//! - **MetadataCache**: Low-level SQLite key-value store
+//! - **InferenceCache**: TTL-based cache for inference results with version tracking
+//! - **GraphCache**: Two-tier cache for UnifiedGraph with per-entity granularity
+//!
+//! # Cache Architecture
+//!
+//! ```text
+//! ┌─────────────────────────────────────┐
+//! │     Inference Cache (Layer 1)       │
+//! │  - TTL-based (configurable)         │
+//! │  - Query failure triggers invalidation│
+//! │  - Produces inference_version       │
+//! └─────────────────────────────────────┘
+//!                  │
+//!                  ▼ (inference_version)
+//! ┌─────────────────────────────────────┐
+//! │      Graph Cache (Layer 2)          │
+//! │  - Content-hash based               │
+//! │  - Per-entity granularity           │
+//! │  - Depends on inference_version     │
+//! └─────────────────────────────────────┘
+//! ```
 //!
 //! # Key Format
 //!
+//! **Metadata keys:**
 //! ```text
 //! {conn_hash}:schemas                     -> ["main", "analytics", ...]
 //! {conn_hash}:tables:{schema}             -> [TableInfo, ...]
 //! {conn_hash}:metadata:{schema}.{table}   -> TableMetadata
-//! {conn_hash}:fks:{schema}.{table}        -> [ForeignKeyInfo, ...]
-//! {conn_hash}:stats:{schema}.{table}.{col}-> ColumnStats
+//! ```
+//!
+//! **Inference keys:**
+//! ```text
+//! inference:{model_hash}                  -> CachedInference
+//! ```
+//!
+//! **Graph keys:**
+//! ```text
+//! graph:{model_hash}:{inference_version}:complete               -> CachedGraph
+//! graph:{model_hash}:{inference_version}:table:{table_hash}:nodes    -> CachedNodes
+//! graph:{model_hash}:{inference_version}:dimension:{dim_hash}:nodes  -> CachedNodes
+//! graph:{model_hash}:{inference_version}:edges                       -> CachedEdges
+//! ```
+//!
+//! # Example
+//!
+//! ```no_run
+//! use mantis_core::cache::{MetadataCache, GraphCache, GraphCacheConfig};
+//! use std::time::Duration;
+//!
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let storage = MetadataCache::open()?;
+//! let config = GraphCacheConfig {
+//!     inference_ttl: Duration::from_secs(3600),
+//!     max_cache_size: Some(100 * 1024 * 1024),
+//!     enable_compression: false,
+//! };
+//! let cache = GraphCache::new(storage, config);
+//!
+//! // Cache will be used by QueryPlanner and translation layer
+//! # Ok(())
+//! # }
 //! ```
 
 mod hash;
@@ -27,7 +78,8 @@ pub use inference_cache::{InferenceCache, InferenceVersion};
 
 mod graph_cache;
 pub use graph_cache::{
-    CacheStats, CachedEdges, CachedGraph, CachedNodes, GraphCache, GraphCacheConfig, GraphCacheKey,
+    CachedEdges, CachedGraph, CachedNodes, GraphCache, GraphCacheConfig, GraphCacheKey,
+    GraphCacheStats,
 };
 
 use std::path::PathBuf;
