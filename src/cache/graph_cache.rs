@@ -187,6 +187,34 @@ impl GraphCache {
             total_size_bytes: overall.total_size_bytes,
         })
     }
+
+    /// Compute content hash for model globals (defaults + calendars).
+    pub fn compute_model_hash(
+        defaults: &serde_json::Value,
+        calendars: &serde_json::Value,
+    ) -> String {
+        use serde_json::json;
+        compute_hash(&json!({
+            "defaults": defaults,
+            "calendars": calendars,
+        }))
+        .expect("Failed to compute model hash")
+    }
+
+    /// Compute content hash for a table (including measures).
+    pub fn compute_table_hash(table: &serde_json::Value, measures: &serde_json::Value) -> String {
+        use serde_json::json;
+        compute_hash(&json!({
+            "table": table,
+            "measures": measures,
+        }))
+        .expect("Failed to compute table hash")
+    }
+
+    /// Compute content hash for a dimension.
+    pub fn compute_dimension_hash(dimension: &serde_json::Value) -> String {
+        compute_hash(dimension).expect("Failed to compute dimension hash")
+    }
 }
 
 /// Statistics about cache usage.
@@ -386,5 +414,40 @@ mod tests {
         assert_eq!(stats.graph_entries, 2);
         assert_eq!(stats.inference_entries, 1);
         assert!(stats.total_size_bytes > 0);
+    }
+
+    #[test]
+    fn test_compute_model_hash() {
+        let defaults = serde_json::json!({"timezone": "UTC"});
+        let calendars = serde_json::json!({"fiscal": {}});
+
+        let hash1 = GraphCache::compute_model_hash(&defaults, &calendars);
+        let hash2 = GraphCache::compute_model_hash(&defaults, &calendars);
+        assert_eq!(hash1, hash2, "same inputs should produce same hash");
+        assert_eq!(hash1.len(), 64, "SHA256 hex = 64 chars");
+    }
+
+    #[test]
+    fn test_compute_table_hash() {
+        let table = serde_json::json!({"name": "orders", "source": "db.orders"});
+        let measures = serde_json::json!({"total": {"expr": "SUM(amount)"}});
+
+        let hash1 = GraphCache::compute_table_hash(&table, &measures);
+        let hash2 = GraphCache::compute_table_hash(&table, &measures);
+        assert_eq!(hash1, hash2);
+
+        // Different measures should produce different hash
+        let different_measures = serde_json::json!({"count": {"expr": "COUNT(*)"}});
+        let hash3 = GraphCache::compute_table_hash(&table, &different_measures);
+        assert_ne!(hash1, hash3);
+    }
+
+    #[test]
+    fn test_compute_dimension_hash() {
+        let dim = serde_json::json!({"name": "customer", "key": "customer_id"});
+
+        let hash1 = GraphCache::compute_dimension_hash(&dim);
+        let hash2 = GraphCache::compute_dimension_hash(&dim);
+        assert_eq!(hash1, hash2);
     }
 }
