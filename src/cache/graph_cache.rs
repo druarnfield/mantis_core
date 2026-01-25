@@ -162,6 +162,42 @@ impl GraphCache {
     pub fn config(&self) -> &GraphCacheConfig {
         &self.config
     }
+
+    /// Clear all graph cache entries (keeps inference cache).
+    pub fn clear_graph_cache(&self) -> CacheResult<usize> {
+        self.storage.delete_prefix("graph:")
+    }
+
+    /// Clear all caches (graph + inference).
+    pub fn clear_all(&self) -> CacheResult<()> {
+        self.storage.delete_prefix("graph:")?;
+        self.inference_cache.clear_all()?;
+        Ok(())
+    }
+
+    /// Get cache statistics.
+    pub fn stats(&self) -> CacheResult<CacheStats> {
+        let graph_entries = self.storage.keys_with_prefix("graph:")?.len();
+        let inference_entries = self.storage.keys_with_prefix("inference:")?.len();
+        let overall = self.storage.stats()?;
+
+        Ok(CacheStats {
+            graph_entries,
+            inference_entries,
+            total_size_bytes: overall.total_size_bytes,
+        })
+    }
+}
+
+/// Statistics about cache usage.
+#[derive(Debug, Clone)]
+pub struct CacheStats {
+    /// Number of graph cache entries
+    pub graph_entries: usize,
+    /// Number of inference cache entries
+    pub inference_entries: usize,
+    /// Total size in bytes
+    pub total_size_bytes: usize,
 }
 
 #[cfg(test)]
@@ -298,5 +334,57 @@ mod tests {
 
         // Should be able to access inference cache
         let _inference = cache.inference();
+    }
+
+    #[test]
+    fn test_clear_graph_cache() {
+        let storage = MetadataCache::open_in_memory().unwrap();
+        let cache = GraphCache::new(storage.clone(), GraphCacheConfig::default());
+
+        // Add some graph entries
+        storage.set("graph:test:v1:complete", &"data").unwrap();
+        storage.set("graph:test:v1:edges", &"edges").unwrap();
+
+        // Add inference entry
+        storage.set("inference:test", &"inference").unwrap();
+
+        // Clear graph cache only
+        let deleted = cache.clear_graph_cache().unwrap();
+        assert_eq!(deleted, 2);
+
+        // Inference should still exist
+        let inf: Option<String> = storage.get("inference:test").unwrap();
+        assert!(inf.is_some());
+    }
+
+    #[test]
+    fn test_clear_all() {
+        let storage = MetadataCache::open_in_memory().unwrap();
+        let cache = GraphCache::new(storage.clone(), GraphCacheConfig::default());
+
+        storage.set("graph:test:v1:complete", &"data").unwrap();
+        storage.set("inference:test", &"inference").unwrap();
+
+        cache.clear_all().unwrap();
+
+        let graph: Option<String> = storage.get("graph:test:v1:complete").unwrap();
+        let inf: Option<String> = storage.get("inference:test").unwrap();
+        assert!(graph.is_none());
+        assert!(inf.is_none());
+    }
+
+    #[test]
+    fn test_cache_stats() {
+        let storage = MetadataCache::open_in_memory().unwrap();
+        let cache = GraphCache::new(storage.clone(), GraphCacheConfig::default());
+
+        storage.set("graph:m1:v1:complete", &"data1").unwrap();
+        storage.set("graph:m1:v1:edges", &"data2").unwrap();
+        storage.set("inference:m1", &"inf").unwrap();
+
+        let stats = cache.stats().unwrap();
+        assert_eq!(stats.graph_entries, 2);
+        assert_eq!(stats.inference_entries, 1);
+        assert!(stats.total_size_bytes > 0);
     }
 }
