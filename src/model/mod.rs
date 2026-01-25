@@ -3,6 +3,7 @@
 pub mod calendar;
 pub mod defaults;
 pub mod dimension;
+pub mod expr;
 pub mod measure;
 pub mod report;
 pub mod table;

@@ -10,6 +10,7 @@
 //! - Report definitions
 
 use crate::dsl::span::{Span, Spanned};
+use serde::{Deserialize, Serialize};
 
 // ============================================================================
 // Model (Root)
@@ -377,7 +378,7 @@ pub struct Attribute {
 }
 
 /// Data types for attributes and slicers.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DataType {
     String,
     Int,
@@ -662,10 +663,7 @@ pub struct DrillPathRef {
 #[derive(Debug, Clone, PartialEq)]
 pub enum ShowItem {
     /// Simple measure reference: `<measure>`.
-    Measure {
-        name: String,
-        label: Option<String>,
-    },
+    Measure { name: String, label: Option<String> },
     /// Measure with time intelligence suffix: `<measure>.<suffix>`.
     MeasureWithSuffix {
         name: String,
