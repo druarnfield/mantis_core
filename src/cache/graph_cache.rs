@@ -1,7 +1,10 @@
 //! Unified graph caching with per-entity granularity.
 
-use super::{compute_hash, CacheError, CacheResult, InferenceVersion, MetadataCache};
+use super::{
+    compute_hash, CacheError, CacheResult, InferenceCache, InferenceVersion, MetadataCache,
+};
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use std::time::Duration;
 
 /// Helper for generating graph cache keys.
@@ -132,6 +135,35 @@ impl Default for GraphCacheConfig {
     }
 }
 
+/// Graph cache service with two-tier caching (inference + graph).
+pub struct GraphCache {
+    storage: MetadataCache,
+    inference_cache: Arc<InferenceCache>,
+    config: GraphCacheConfig,
+}
+
+impl GraphCache {
+    /// Create a new graph cache.
+    pub fn new(storage: MetadataCache, config: GraphCacheConfig) -> Self {
+        let inference_cache = Arc::new(InferenceCache::new(storage.clone()));
+        Self {
+            storage,
+            inference_cache,
+            config,
+        }
+    }
+
+    /// Get reference to inference cache.
+    pub fn inference(&self) -> &InferenceCache {
+        &self.inference_cache
+    }
+
+    /// Get configuration.
+    pub fn config(&self) -> &GraphCacheConfig {
+        &self.config
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -248,5 +280,23 @@ mod tests {
         assert_eq!(config.inference_ttl, Duration::from_secs(7200));
         assert_eq!(config.max_cache_size, None);
         assert!(config.enable_compression);
+    }
+
+    #[test]
+    fn test_graph_cache_creation() {
+        let storage = MetadataCache::open_in_memory().unwrap();
+        let config = GraphCacheConfig::default();
+        let cache = GraphCache::new(storage, config);
+
+        assert_eq!(cache.config().inference_ttl, Duration::from_secs(3600));
+    }
+
+    #[test]
+    fn test_graph_cache_inference_access() {
+        let storage = MetadataCache::open_in_memory().unwrap();
+        let cache = GraphCache::new(storage, GraphCacheConfig::default());
+
+        // Should be able to access inference cache
+        let _inference = cache.inference();
     }
 }
