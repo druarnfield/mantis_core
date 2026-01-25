@@ -371,13 +371,13 @@ pub struct CacheKey;
 impl CacheKey {
     /// Hash a connection string for use in cache keys.
     pub fn hash_connection(driver: &str, conn_str: &str) -> String {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
+        use serde_json::json;
 
-        let mut hasher = DefaultHasher::new();
-        driver.hash(&mut hasher);
-        conn_str.hash(&mut hasher);
-        format!("{:016x}", hasher.finish())
+        compute_hash(&json!({
+            "driver": driver,
+            "connection_string": conn_str
+        }))
+        .expect("Failed to hash connection parameters")
     }
 
     /// Key for list of schemas.
