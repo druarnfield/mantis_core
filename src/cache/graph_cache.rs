@@ -2,6 +2,7 @@
 
 use super::{compute_hash, CacheError, CacheResult, InferenceVersion, MetadataCache};
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 
 /// Helper for generating graph cache keys.
 pub struct GraphCacheKey;
@@ -110,6 +111,27 @@ impl CachedGraph {
     }
 }
 
+/// Configuration for graph cache behavior.
+#[derive(Debug, Clone)]
+pub struct GraphCacheConfig {
+    /// TTL for inference cache
+    pub inference_ttl: Duration,
+    /// Maximum cache size in bytes (None = unlimited)
+    pub max_cache_size: Option<usize>,
+    /// Enable zstd compression for cached graphs
+    pub enable_compression: bool,
+}
+
+impl Default for GraphCacheConfig {
+    fn default() -> Self {
+        Self {
+            inference_ttl: Duration::from_secs(3600), // 1 hour
+            max_cache_size: Some(100 * 1024 * 1024),  // 100MB
+            enable_compression: false,                // Start simple
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -206,5 +228,25 @@ mod tests {
         let json = serde_json::to_string(&cached).unwrap();
         let deserialized: CachedGraph = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.graph, cached.graph);
+    }
+
+    #[test]
+    fn test_default_config() {
+        let config = GraphCacheConfig::default();
+        assert_eq!(config.inference_ttl, Duration::from_secs(3600));
+        assert_eq!(config.max_cache_size, Some(100 * 1024 * 1024));
+        assert!(!config.enable_compression);
+    }
+
+    #[test]
+    fn test_custom_config() {
+        let config = GraphCacheConfig {
+            inference_ttl: Duration::from_secs(7200),
+            max_cache_size: None,
+            enable_compression: true,
+        };
+        assert_eq!(config.inference_ttl, Duration::from_secs(7200));
+        assert_eq!(config.max_cache_size, None);
+        assert!(config.enable_compression);
     }
 }
