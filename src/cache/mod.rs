@@ -26,7 +26,7 @@ mod inference_cache;
 pub use inference_cache::{InferenceCache, InferenceVersion};
 
 mod graph_cache;
-pub use graph_cache::GraphCacheKey;
+pub use graph_cache::{CachedEdges, CachedGraph, CachedNodes, GraphCacheKey};
 
 use std::path::PathBuf;
 

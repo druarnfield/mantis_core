@@ -50,6 +50,66 @@ impl GraphCacheKey {
     }
 }
 
+/// Cached graph nodes with versioning.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CachedNodes {
+    /// Schema version for forward compatibility
+    pub version: u32,
+    /// Serialized nodes (JSON array of GraphNode)
+    pub nodes: serde_json::Value,
+}
+
+impl CachedNodes {
+    const CURRENT_VERSION: u32 = 1;
+
+    pub fn new(nodes: serde_json::Value) -> Self {
+        Self {
+            version: Self::CURRENT_VERSION,
+            nodes,
+        }
+    }
+}
+
+/// Cached graph edges with versioning.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CachedEdges {
+    /// Schema version for forward compatibility
+    pub version: u32,
+    /// Edges as (from_id, to_id, edge_type) tuples
+    pub edges: Vec<(String, String, String)>,
+}
+
+impl CachedEdges {
+    const CURRENT_VERSION: u32 = 1;
+
+    pub fn new(edges: Vec<(String, String, String)>) -> Self {
+        Self {
+            version: Self::CURRENT_VERSION,
+            edges,
+        }
+    }
+}
+
+/// Complete cached graph with versioning.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CachedGraph {
+    /// Schema version
+    pub version: u32,
+    /// Serialized UnifiedGraph
+    pub graph: serde_json::Value,
+}
+
+impl CachedGraph {
+    const CURRENT_VERSION: u32 = 1;
+
+    pub fn new(graph: serde_json::Value) -> Self {
+        Self {
+            version: Self::CURRENT_VERSION,
+            graph,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -100,5 +160,51 @@ mod tests {
             key1, key2,
             "different inference versions should produce different keys"
         );
+    }
+
+    #[test]
+    fn test_cached_nodes_serialization() {
+        let nodes = serde_json::json!([{"id": "t1", "type": "table"}]);
+        let cached = CachedNodes::new(nodes.clone());
+
+        assert_eq!(cached.version, 1);
+        assert_eq!(cached.nodes, nodes);
+
+        // Roundtrip
+        let json = serde_json::to_string(&cached).unwrap();
+        let deserialized: CachedNodes = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.version, cached.version);
+        assert_eq!(deserialized.nodes, cached.nodes);
+    }
+
+    #[test]
+    fn test_cached_edges_serialization() {
+        let edges = vec![
+            ("n1".to_string(), "n2".to_string(), "BELONGS_TO".to_string()),
+            ("n2".to_string(), "n3".to_string(), "REFERENCES".to_string()),
+        ];
+        let cached = CachedEdges::new(edges.clone());
+
+        assert_eq!(cached.version, 1);
+        assert_eq!(cached.edges, edges);
+
+        // Roundtrip
+        let json = serde_json::to_string(&cached).unwrap();
+        let deserialized: CachedEdges = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.edges, cached.edges);
+    }
+
+    #[test]
+    fn test_cached_graph_serialization() {
+        let graph = serde_json::json!({"nodes": [], "edges": []});
+        let cached = CachedGraph::new(graph.clone());
+
+        assert_eq!(cached.version, 1);
+        assert_eq!(cached.graph, graph);
+
+        // Roundtrip
+        let json = serde_json::to_string(&cached).unwrap();
+        let deserialized: CachedGraph = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.graph, cached.graph);
     }
 }
