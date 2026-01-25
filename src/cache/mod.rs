@@ -23,7 +23,7 @@ mod hash;
 pub use hash::compute_hash;
 
 mod inference_cache;
-pub use inference_cache::InferenceVersion;
+pub use inference_cache::{InferenceCache, InferenceVersion};
 
 use std::path::PathBuf;
 
