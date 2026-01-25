@@ -8,7 +8,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use super::provider::{MetadataProvider, MetadataResult};
-use super::types::*;
+use super::{ColumnStats, ForeignKeyInfo, SchemaInfo, TableInfo, TableMetadata, ValueOverlap};
 use crate::worker::protocol::{self, methods, ConnectionParams};
 use crate::worker::WorkerClient;
 

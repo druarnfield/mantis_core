@@ -2,43 +2,36 @@
 //!
 //! A universal semantic layer that compiles to multi-dialect SQL.
 //!
-//! ## Quick Start
-//!
-//! ```rust
-//! use mantis::prelude::*;
-//!
-//! let query = Query::new()
-//!     .select(vec![col("id"), col("name")])
-//!     .from(TableRef::new("users").with_schema("dbo"))
-//!     .filter(col("active").eq(true))
-//!     .filter(col("age").gte(18))
-//!     .order_by(vec![OrderByExpr::desc(col("created_at"))])
-//!     .limit(10);
-//!
-//! // Generate SQL for different dialects
-//! println!("{}", query.to_sql(Dialect::DuckDb));
-//! println!("{}", query.to_sql(Dialect::TSql));
-//! println!("{}", query.to_sql(Dialect::MySql));
-//! println!("{}", query.to_sql(Dialect::Postgres));
-//! ```
-//!
 //! ## Architecture
 //!
-//! Mantis is a **unified semantic layer** serving two purposes:
-//!
-//! - **Build**: Transform normalized sources into a star schema warehouse
-//! - **Query**: Provide a semantic interface over the warehouse for analytics
+//! Mantis provides a DSL-first semantic modeling system:
 //!
 //! ```text
 //! ┌─────────────────────────────────────────────────────────┐
-//! │                        Model                             │
-//! │  (Sources, Relationships, Facts, Dimensions, Measures)   │
+//! │              DSL (Semantic Model Definition)             │
+//! │  (tables, dimensions, measures, calendars, reports)      │
 //! └─────────────────────────────────────────────────────────┘
 //!                          │
-//!          ┌───────────────┴───────────────┐
-//!          ▼                               ▼
-//!   TransformPlanner                 QueryPlanner
-//!   (sources → DDL)               (query → SELECT)
+//!                          ▼ [parser]
+//! ┌─────────────────────────────────────────────────────────┐
+//! │                     AST                                  │
+//! └─────────────────────────────────────────────────────────┘
+//!                          │
+//!                          ▼ [lowering]
+//! ┌─────────────────────────────────────────────────────────┐
+//! │                  Model (Rust Types)                      │
+//! └─────────────────────────────────────────────────────────┘
+//!                          │
+//!                          ▼ [graph builder]
+//! ┌─────────────────────────────────────────────────────────┐
+//! │          UnifiedGraph (Column-Level Semantic)            │
+//! │          + Inference (Relationship Discovery)            │
+//! └─────────────────────────────────────────────────────────┘
+//!                          │
+//!                          ▼ [planner - to be rebuilt]
+//! ┌─────────────────────────────────────────────────────────┐
+//! │                    SQL Query                             │
+//! └─────────────────────────────────────────────────────────┘
 //! ```
 
 pub mod cache;
@@ -46,12 +39,11 @@ pub mod config;
 pub mod crypto;
 pub mod dsl;
 pub mod lowering;
-pub mod lsp;
+// pub mod lsp;  // Temporarily disabled - needs rebuilding with new DSL loader
 pub mod metadata;
 pub mod model;
 pub mod semantic;
 pub mod sql;
-pub mod translation;
 pub mod validation;
 pub mod worker;
 

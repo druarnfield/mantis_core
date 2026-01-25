@@ -46,9 +46,23 @@
 //! ```
 
 mod provider;
-mod types;
+// mod types;  // Archived - old SourceEntity/SourceColumn types
 mod worker_provider;
 
 pub use provider::{MetadataProvider, MetadataProviderExt};
-pub use types::*;
+// pub use types::*;  // Archived
 pub use worker_provider::WorkerMetadataProvider;
+
+// Re-export types from worker protocol
+pub use crate::worker::protocol::{ForeignKeyInfo, TableInfo};
+
+// Type aliases for response types used by MetadataProvider trait
+pub use crate::worker::protocol::ColumnStatsResponse as ColumnStats;
+pub use crate::worker::protocol::GetTableResponse as TableMetadata;
+pub use crate::worker::protocol::ValueOverlapResponse as ValueOverlap;
+
+// Schema info type
+#[derive(Debug, Clone)]
+pub struct SchemaInfo {
+    pub name: String,
+}

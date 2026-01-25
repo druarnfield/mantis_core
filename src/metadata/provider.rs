@@ -6,7 +6,7 @@
 
 use async_trait::async_trait;
 
-use super::types::*;
+use super::{ColumnStats, ForeignKeyInfo, SchemaInfo, TableInfo, TableMetadata, ValueOverlap};
 use crate::semantic::inference::{
     InferenceConfig, InferenceEngine, InferredRelationship, TableInfo as InferenceTableInfo,
 };
