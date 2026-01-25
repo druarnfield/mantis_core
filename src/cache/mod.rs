@@ -22,6 +22,9 @@
 mod hash;
 pub use hash::compute_hash;
 
+mod inference_cache;
+pub use inference_cache::InferenceVersion;
+
 use std::path::PathBuf;
 
 use rusqlite::{params, Connection, OptionalExtension};
