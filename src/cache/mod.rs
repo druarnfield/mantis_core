@@ -19,6 +19,9 @@
 //! {conn_hash}:stats:{schema}.{table}.{col}-> ColumnStats
 //! ```
 
+mod hash;
+pub use hash::compute_hash;
+
 use std::path::PathBuf;
 
 use rusqlite::{params, Connection, OptionalExtension};
@@ -127,14 +130,10 @@ impl MetadataCache {
         // Check version
         let stored_version: Option<i32> = self
             .conn
-            .query_row(
-                "SELECT value FROM meta WHERE key = 'version'",
-                [],
-                |row| {
-                    let s: String = row.get(0)?;
-                    Ok(s.parse().unwrap_or(0))
-                },
-            )
+            .query_row("SELECT value FROM meta WHERE key = 'version'", [], |row| {
+                let s: String = row.get(0)?;
+                Ok(s.parse().unwrap_or(0))
+            })
             .optional()?;
 
         match stored_version {
@@ -168,9 +167,11 @@ impl MetadataCache {
     pub fn get<T: DeserializeOwned>(&self, key: &str) -> CacheResult<Option<T>> {
         let json: Option<String> = self
             .conn
-            .query_row("SELECT value FROM cache WHERE key = ?", params![key], |row| {
-                row.get(0)
-            })
+            .query_row(
+                "SELECT value FROM cache WHERE key = ?",
+                params![key],
+                |row| row.get(0),
+            )
             .optional()?;
 
         match json {
@@ -235,13 +236,11 @@ impl MetadataCache {
             .conn
             .query_row("SELECT COUNT(*) FROM cache", [], |row| row.get(0))?;
 
-        let total_size: i64 = self
-            .conn
-            .query_row(
-                "SELECT COALESCE(SUM(LENGTH(value)), 0) FROM cache",
-                [],
-                |row| row.get(0),
-            )?;
+        let total_size: i64 = self.conn.query_row(
+            "SELECT COALESCE(SUM(LENGTH(value)), 0) FROM cache",
+            [],
+            |row| row.get(0),
+        )?;
 
         Ok(CacheStats {
             entry_count: entry_count as usize,
@@ -334,8 +333,8 @@ impl MetadataCache {
                     params![now, id],
                 )?;
 
-                let conn_str = String::from_utf8(decrypted)
-                    .map_err(|e| CacheError::Crypto(e.to_string()))?;
+                let conn_str =
+                    String::from_utf8(decrypted).map_err(|e| CacheError::Crypto(e.to_string()))?;
                 Ok(Some(conn_str))
             }
             Err(_) => {
@@ -456,7 +455,10 @@ mod tests {
 
         // Get it back
         let value: Option<Vec<String>> = cache.get("test:key").unwrap();
-        assert_eq!(value, Some(vec!["a".to_string(), "b".to_string(), "c".to_string()]));
+        assert_eq!(
+            value,
+            Some(vec!["a".to_string(), "b".to_string(), "c".to_string()])
+        );
 
         // Get non-existent key
         let missing: Option<String> = cache.get("nonexistent").unwrap();
@@ -547,7 +549,12 @@ mod tests {
 
         // Save credential
         let id = cache
-            .save_credential(&key, "mssql", "server=localhost;database=test", Some("Production"))
+            .save_credential(
+                &key,
+                "mssql",
+                "server=localhost;database=test",
+                Some("Production"),
+            )
             .unwrap();
         assert!(!id.is_empty());
 
