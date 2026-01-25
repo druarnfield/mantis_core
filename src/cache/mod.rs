@@ -25,6 +25,9 @@ pub use hash::compute_hash;
 mod inference_cache;
 pub use inference_cache::{InferenceCache, InferenceVersion};
 
+mod graph_cache;
+pub use graph_cache::GraphCacheKey;
+
 use std::path::PathBuf;
 
 use rusqlite::{params, Connection, OptionalExtension};
