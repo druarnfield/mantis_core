@@ -1,5 +1,11 @@
 // src/planner/join_optimizer/dp_optimizer.rs
-use std::collections::BTreeSet;
+use crate::model::expr::Expr;
+use crate::planner::cost::CostEstimate;
+use crate::planner::join_optimizer::cardinality::CardinalityEstimator;
+use crate::planner::join_optimizer::join_graph::JoinGraph;
+use crate::planner::logical::LogicalPlan;
+use crate::semantic::graph::UnifiedGraph;
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 /// A set of tables represented as a BTreeSet for deterministic ordering.
 #[derive(Hash, Eq, PartialEq, Clone, Debug)]
@@ -112,4 +118,103 @@ pub fn enumerate_splits(subset: &TableSet) -> Vec<(TableSet, TableSet)> {
     }
 
     splits
+}
+
+/// Dynamic Programming Join Optimizer.
+pub struct DPOptimizer<'a> {
+    graph: &'a UnifiedGraph,
+    join_graph: Option<JoinGraph>,
+    pub filters: Vec<ClassifiedFilter>,
+    cardinality_estimator: CardinalityEstimator<'a>,
+    memo: HashMap<TableSet, SubsetPlan>,
+}
+
+/// A filter classified by its table dependencies.
+pub struct ClassifiedFilter {
+    pub expr: Expr,
+    pub referenced_tables: HashSet<String>,
+    pub selectivity: f64,
+}
+
+struct SubsetPlan {
+    #[allow(dead_code)]
+    plan: LogicalPlan,
+    #[allow(dead_code)]
+    estimated_rows: usize,
+    #[allow(dead_code)]
+    cost: CostEstimate,
+}
+
+impl<'a> DPOptimizer<'a> {
+    pub fn new(graph: &'a UnifiedGraph) -> Self {
+        let cardinality_estimator = CardinalityEstimator::new(graph);
+
+        Self {
+            graph,
+            join_graph: None,
+            filters: Vec::new(),
+            cardinality_estimator,
+            memo: HashMap::new(),
+        }
+    }
+
+    pub fn classify_filters(&mut self, filters: Vec<Expr>) -> Vec<ClassifiedFilter> {
+        filters
+            .into_iter()
+            .map(|expr| {
+                let tables = self.extract_referenced_tables(&expr);
+                let selectivity = self
+                    .cardinality_estimator
+                    .estimate_filter_selectivity(&expr);
+
+                ClassifiedFilter {
+                    expr,
+                    referenced_tables: tables,
+                    selectivity,
+                }
+            })
+            .collect()
+    }
+
+    fn extract_referenced_tables(&self, expr: &Expr) -> HashSet<String> {
+        let mut tables = HashSet::new();
+        self.collect_tables_from_expr(expr, &mut tables);
+        tables
+    }
+
+    fn collect_tables_from_expr(&self, expr: &Expr, tables: &mut HashSet<String>) {
+        match expr {
+            Expr::Column {
+                entity: Some(table),
+                ..
+            } => {
+                tables.insert(table.clone());
+            }
+            Expr::BinaryOp { left, right, .. } => {
+                self.collect_tables_from_expr(left, tables);
+                self.collect_tables_from_expr(right, tables);
+            }
+            Expr::UnaryOp { expr, .. } => {
+                self.collect_tables_from_expr(expr, tables);
+            }
+            Expr::Case {
+                conditions,
+                else_expr,
+            } => {
+                for (cond, val) in conditions {
+                    self.collect_tables_from_expr(cond, tables);
+                    self.collect_tables_from_expr(val, tables);
+                }
+                if let Some(e) = else_expr {
+                    self.collect_tables_from_expr(e, tables);
+                }
+            }
+            Expr::Function { args, .. } => {
+                for arg in args {
+                    self.collect_tables_from_expr(arg, tables);
+                }
+            }
+            _ => {}
+        }
+    }
 }

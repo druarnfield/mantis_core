@@ -1,5 +1,7 @@
 // tests/planner/dp_optimizer_test.rs
+use mantis::model::expr::{BinaryOp, Expr};
 use mantis::planner::join_optimizer::dp_optimizer::*;
+use mantis::semantic::graph::UnifiedGraph;
 use std::collections::BTreeSet;
 
 #[test]
@@ -91,4 +93,44 @@ fn test_enumerate_splits_three_tables() {
     // We don't need size 2 because we'd get duplicates
     // Total: 3 unique splits
     assert_eq!(splits.len(), 3);
+}
+
+#[test]
+fn test_classify_single_table_filter() {
+    let graph = UnifiedGraph::new();
+    let mut dp = DPOptimizer::new(&graph);
+
+    // WHERE orders.amount > 1000
+    let filter = Expr::binary(
+        Expr::qualified_column("orders", "amount"),
+        BinaryOp::Gt,
+        Expr::int(1000),
+    );
+
+    let classified = dp.classify_filters(vec![filter]);
+
+    assert_eq!(classified.len(), 1);
+    assert_eq!(classified[0].referenced_tables.len(), 1);
+    assert!(classified[0].referenced_tables.contains("orders"));
+    assert!((classified[0].selectivity - 0.33).abs() < 0.01);
+}
+
+#[test]
+fn test_classify_join_filter() {
+    let graph = UnifiedGraph::new();
+    let mut dp = DPOptimizer::new(&graph);
+
+    // WHERE orders.customer_id = customers.id (join condition)
+    let filter = Expr::binary(
+        Expr::qualified_column("orders", "customer_id"),
+        BinaryOp::Eq,
+        Expr::qualified_column("customers", "id"),
+    );
+
+    let classified = dp.classify_filters(vec![filter]);
+
+    assert_eq!(classified.len(), 1);
+    assert_eq!(classified[0].referenced_tables.len(), 2);
+    assert!(classified[0].referenced_tables.contains("orders"));
+    assert!(classified[0].referenced_tables.contains("customers"));
 }
