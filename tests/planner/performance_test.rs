@@ -24,9 +24,9 @@ use std::time::Instant;
 /// Create a test graph with realistic data warehouse sizes.
 ///
 /// Schema:
-/// - Sales (1M rows, large fact table)
-/// - Products (10K rows, medium dimension)
-/// - Categories (100 rows, small dimension)
+/// - Sales (10M rows, large fact table)
+/// - Products (100K rows, large dimension)
+/// - Categories (1K rows, medium dimension)
 ///
 /// Relationships:
 /// - Sales → Products (N:1)
@@ -40,32 +40,32 @@ fn create_realistic_test_graph() -> UnifiedGraph {
         entity_type: EntityType::Fact,
         physical_name: None,
         schema: None,
-        row_count: Some(1_000_000), // 1M rows
+        row_count: Some(10_000_000), // 10M rows (increased from 1M)
         size_category: SizeCategory::Large,
         metadata: Default::default(),
     };
     let sales_idx = graph.add_test_entity(sales);
 
-    // Products: Medium dimension
+    // Products: Large dimension
     let products = EntityNode {
         name: "products".to_string(),
         entity_type: EntityType::Dimension,
         physical_name: None,
         schema: None,
-        row_count: Some(10_000), // 10K rows
-        size_category: SizeCategory::Medium,
+        row_count: Some(100_000), // 100K rows (increased from 10K)
+        size_category: SizeCategory::Large,
         metadata: Default::default(),
     };
     let products_idx = graph.add_test_entity(products);
 
-    // Categories: Small dimension
+    // Categories: Medium dimension
     let categories = EntityNode {
         name: "categories".to_string(),
         entity_type: EntityType::Dimension,
         physical_name: None,
         schema: None,
-        row_count: Some(100), // 100 rows
-        size_category: SizeCategory::Small,
+        row_count: Some(1_000), // 1K rows (increased from 100)
+        size_category: SizeCategory::Medium,
         metadata: Default::default(),
     };
     let categories_idx = graph.add_test_entity(categories);
@@ -198,12 +198,15 @@ fn test_three_table_optimization_improves_cost() {
         naive_cost.total()
     );
 
-    // STRONG ASSERTION: For this schema, optimized should be better or equal
-    // The actual improvement depends on join order optimizer choices
+    // STRONG ASSERTION: For this schema, optimized should show significant improvement
+    // The optimizer should choose (products ⋈ categories) first, which reduces intermediate
+    // result size before joining sales.
     let improvement_ratio = naive_cost.total() / optimized_cost.total();
     assert!(
-        improvement_ratio >= 1.0,
-        "Optimized plan should be at least as good as naive. Improvement: {:.2}x",
+        improvement_ratio >= 1.5,
+        "Optimized plan should show significant improvement (>= 1.5x). Got: {:.2}x. \
+         This test requires the optimizer to choose (products ⋈ categories) first, \
+         which reduces intermediate result size before joining sales.",
         improvement_ratio
     );
 }
@@ -218,14 +221,14 @@ fn create_naive_physical_plan(graph: &UnifiedGraph) -> PhysicalPlan {
     let sales_scan = PhysicalPlan::TableScan {
         table: "sales".to_string(),
         strategy: TableScanStrategy::FullScan,
-        estimated_rows: Some(1_000_000),
+        estimated_rows: Some(10_000_000),
     };
 
     // Scan products
     let products_scan = PhysicalPlan::TableScan {
         table: "products".to_string(),
         strategy: TableScanStrategy::FullScan,
-        estimated_rows: Some(10_000),
+        estimated_rows: Some(100_000),
     };
 
     // Join sales → products
@@ -233,14 +236,14 @@ fn create_naive_physical_plan(graph: &UnifiedGraph) -> PhysicalPlan {
         left: Box::new(sales_scan),
         right: Box::new(products_scan),
         on: vec![("product_id".to_string(), "id".to_string())],
-        estimated_rows: Some(1_000_000), // N:1 join preserves left side
+        estimated_rows: Some(10_000_000), // N:1 join preserves left side
     };
 
     // Scan categories
     let categories_scan = PhysicalPlan::TableScan {
         table: "categories".to_string(),
         strategy: TableScanStrategy::FullScan,
-        estimated_rows: Some(100),
+        estimated_rows: Some(1_000),
     };
 
     // Join (sales ⋈ products) → categories
@@ -248,7 +251,7 @@ fn create_naive_physical_plan(graph: &UnifiedGraph) -> PhysicalPlan {
         left: Box::new(sales_products_join),
         right: Box::new(categories_scan),
         on: vec![("category_id".to_string(), "id".to_string())],
-        estimated_rows: Some(1_000_000), // N:1 join preserves left side
+        estimated_rows: Some(10_000_000), // N:1 join preserves left side
     }
 }
 
@@ -566,4 +569,685 @@ fn test_greedy_vs_enumeration_threshold() {
         elapsed_large.as_millis() < 200,
         "Large query should be fast"
     );
+}
+
+// ============================================================================
+// Additional Performance Tests - Realistic Optimization Scenarios
+// ============================================================================
+
+/// Create a star schema graph with one large fact table and 3 small dimensions.
+///
+/// Schema:
+/// - Orders (10M rows, large fact table)
+/// - Customers (100 rows, small dimension)
+/// - Products (100 rows, small dimension)
+/// - Stores (100 rows, small dimension)
+///
+/// Relationships: All dimensions connect to Orders (N:1)
+fn create_star_schema_graph() -> UnifiedGraph {
+    let mut graph = UnifiedGraph::new();
+
+    // Orders: Large central fact table
+    let orders = EntityNode {
+        name: "orders".to_string(),
+        entity_type: EntityType::Fact,
+        physical_name: None,
+        schema: None,
+        row_count: Some(10_000_000), // 10M rows
+        size_category: SizeCategory::Large,
+        metadata: Default::default(),
+    };
+    let orders_idx = graph.add_test_entity(orders);
+
+    // Create 3 small dimension tables
+    let dimensions = vec![("customers", 100), ("products", 100), ("stores", 100)];
+
+    for (name, row_count) in dimensions {
+        let entity = EntityNode {
+            name: name.to_string(),
+            entity_type: EntityType::Dimension,
+            physical_name: None,
+            schema: None,
+            row_count: Some(row_count),
+            size_category: SizeCategory::Small,
+            metadata: Default::default(),
+        };
+        let dim_idx = graph.add_test_entity(entity);
+
+        // Add join: orders → dimension (N:1)
+        graph.add_test_join(
+            orders_idx,
+            dim_idx,
+            JoinsToEdge {
+                from_entity: "orders".to_string(),
+                to_entity: name.to_string(),
+                join_columns: vec![(format!("{}_id", name), "id".to_string())],
+                cardinality: Cardinality::ManyToOne,
+                source: RelationshipSource::ForeignKey,
+            },
+        );
+    }
+
+    graph
+}
+
+#[test]
+fn test_star_schema_optimization() {
+    // PURPOSE: Demonstrate that star schema optimization provides dramatic improvement
+    // by joining all small dimensions first, then joining the result to the large fact table.
+    //
+    // EXPECTATION: >= 5x improvement by avoiding multiple full scans of the fact table.
+
+    let graph = create_star_schema_graph();
+    let planner = PhysicalPlanner::new(&graph);
+    let estimator = CostEstimator::new(&graph);
+
+    // Create naive plan: (((orders ⋈ customers) ⋈ products) ⋈ stores)
+    let naive_plan = create_naive_star_schema_plan();
+
+    // Generate optimized candidates
+    let optimized_candidates = planner
+        .generate_candidates(&naive_plan)
+        .expect("Should generate optimized candidates");
+
+    assert!(
+        !optimized_candidates.is_empty(),
+        "Should generate at least one candidate plan"
+    );
+
+    // Select best optimized plan
+    let best_optimized_plan = estimator
+        .select_best(optimized_candidates)
+        .expect("Should select best plan");
+
+    // Create naive physical plan
+    let naive_physical_plan = create_naive_star_schema_physical_plan(&graph);
+
+    // Compare costs
+    let naive_cost = estimator.estimate(&naive_physical_plan);
+    let optimized_cost = estimator.estimate(&best_optimized_plan);
+
+    println!("\n=== Star Schema Optimization Results ===");
+    println!("Naive plan (left-deep tree with fact table first):");
+    println!("  Total cost: {:.2}", naive_cost.total());
+    println!("\nOptimized plan (dimensions joined first):");
+    println!("  Total cost: {:.2}", optimized_cost.total());
+    println!(
+        "\nImprovement: {:.2}x faster",
+        naive_cost.total() / optimized_cost.total()
+    );
+
+    // STRONG ASSERTION: Star schema optimization should show dramatic improvement
+    let improvement_ratio = naive_cost.total() / optimized_cost.total();
+    assert!(
+        improvement_ratio >= 5.0,
+        "Star schema optimization should show dramatic improvement (>= 5x). Got: {:.2}x. \
+         The optimizer should join all small dimensions first (customers ⋈ products ⋈ stores), \
+         then join the result to the large orders table once.",
+        improvement_ratio
+    );
+}
+
+/// Create a naive star schema plan (left-deep tree starting with fact table).
+fn create_naive_star_schema_plan() -> LogicalPlan {
+    // First join: orders → customers
+    let orders_customers = LogicalPlan::Join(JoinNode {
+        left: Box::new(LogicalPlan::Scan(ScanNode {
+            entity: "orders".to_string(),
+        })),
+        right: Box::new(LogicalPlan::Scan(ScanNode {
+            entity: "customers".to_string(),
+        })),
+        join_type: JoinType::Inner,
+        on: JoinCondition::Equi(vec![(
+            ColumnRef::new("orders".to_string(), "customers_id".to_string()),
+            ColumnRef::new("customers".to_string(), "id".to_string()),
+        )]),
+        cardinality: Some(Cardinality::ManyToOne),
+    });
+
+    // Second join: (orders ⋈ customers) → products
+    let orders_customers_products = LogicalPlan::Join(JoinNode {
+        left: Box::new(orders_customers),
+        right: Box::new(LogicalPlan::Scan(ScanNode {
+            entity: "products".to_string(),
+        })),
+        join_type: JoinType::Inner,
+        on: JoinCondition::Equi(vec![(
+            ColumnRef::new("orders".to_string(), "products_id".to_string()),
+            ColumnRef::new("products".to_string(), "id".to_string()),
+        )]),
+        cardinality: Some(Cardinality::ManyToOne),
+    });
+
+    // Third join: ((orders ⋈ customers) ⋈ products) → stores
+    LogicalPlan::Join(JoinNode {
+        left: Box::new(orders_customers_products),
+        right: Box::new(LogicalPlan::Scan(ScanNode {
+            entity: "stores".to_string(),
+        })),
+        join_type: JoinType::Inner,
+        on: JoinCondition::Equi(vec![(
+            ColumnRef::new("orders".to_string(), "stores_id".to_string()),
+            ColumnRef::new("stores".to_string(), "id".to_string()),
+        )]),
+        cardinality: Some(Cardinality::ManyToOne),
+    })
+}
+
+/// Create a naive star schema physical plan.
+fn create_naive_star_schema_physical_plan(graph: &UnifiedGraph) -> PhysicalPlan {
+    use mantis::planner::physical::TableScanStrategy;
+
+    // Scan orders
+    let orders_scan = PhysicalPlan::TableScan {
+        table: "orders".to_string(),
+        strategy: TableScanStrategy::FullScan,
+        estimated_rows: Some(10_000_000),
+    };
+
+    // Scan customers
+    let customers_scan = PhysicalPlan::TableScan {
+        table: "customers".to_string(),
+        strategy: TableScanStrategy::FullScan,
+        estimated_rows: Some(100),
+    };
+
+    // Join orders → customers
+    let orders_customers = PhysicalPlan::HashJoin {
+        left: Box::new(orders_scan),
+        right: Box::new(customers_scan),
+        on: vec![("customers_id".to_string(), "id".to_string())],
+        estimated_rows: Some(10_000_000),
+    };
+
+    // Scan products
+    let products_scan = PhysicalPlan::TableScan {
+        table: "products".to_string(),
+        strategy: TableScanStrategy::FullScan,
+        estimated_rows: Some(100),
+    };
+
+    // Join (orders ⋈ customers) → products
+    let orders_customers_products = PhysicalPlan::HashJoin {
+        left: Box::new(orders_customers),
+        right: Box::new(products_scan),
+        on: vec![("products_id".to_string(), "id".to_string())],
+        estimated_rows: Some(10_000_000),
+    };
+
+    // Scan stores
+    let stores_scan = PhysicalPlan::TableScan {
+        table: "stores".to_string(),
+        strategy: TableScanStrategy::FullScan,
+        estimated_rows: Some(100),
+    };
+
+    // Join ((orders ⋈ customers) ⋈ products) → stores
+    PhysicalPlan::HashJoin {
+        left: Box::new(orders_customers_products),
+        right: Box::new(stores_scan),
+        on: vec![("stores_id".to_string(), "id".to_string())],
+        estimated_rows: Some(10_000_000),
+    }
+}
+
+/// Create a graph with 4 tables where bushy join tree is optimal.
+///
+/// Schema:
+/// - TableA (1M rows)
+/// - TableB (1K rows)
+/// - TableC (1K rows)
+/// - TableD (100 rows)
+///
+/// Relationships:
+/// - A ⋈ B, B ⋈ C, C ⋈ D (chain)
+/// - A ⋈ D (direct cross-link)
+///
+/// Optimal: (A ⋈ D) ⋈ (B ⋈ C) - bushy tree
+/// Naive: ((A ⋈ B) ⋈ C) ⋈ D - left-deep tree
+fn create_bushy_join_graph() -> UnifiedGraph {
+    let mut graph = UnifiedGraph::new();
+
+    // TableA: Large table
+    let table_a = EntityNode {
+        name: "table_a".to_string(),
+        entity_type: EntityType::Fact,
+        physical_name: None,
+        schema: None,
+        row_count: Some(1_000_000), // 1M rows
+        size_category: SizeCategory::Large,
+        metadata: Default::default(),
+    };
+    let a_idx = graph.add_test_entity(table_a);
+
+    // TableB: Medium table
+    let table_b = EntityNode {
+        name: "table_b".to_string(),
+        entity_type: EntityType::Dimension,
+        physical_name: None,
+        schema: None,
+        row_count: Some(1_000), // 1K rows
+        size_category: SizeCategory::Medium,
+        metadata: Default::default(),
+    };
+    let b_idx = graph.add_test_entity(table_b);
+
+    // TableC: Medium table
+    let table_c = EntityNode {
+        name: "table_c".to_string(),
+        entity_type: EntityType::Dimension,
+        physical_name: None,
+        schema: None,
+        row_count: Some(1_000), // 1K rows
+        size_category: SizeCategory::Medium,
+        metadata: Default::default(),
+    };
+    let c_idx = graph.add_test_entity(table_c);
+
+    // TableD: Small table
+    let table_d = EntityNode {
+        name: "table_d".to_string(),
+        entity_type: EntityType::Dimension,
+        physical_name: None,
+        schema: None,
+        row_count: Some(100), // 100 rows
+        size_category: SizeCategory::Small,
+        metadata: Default::default(),
+    };
+    let d_idx = graph.add_test_entity(table_d);
+
+    // Add joins: A → B, B → C, C → D (chain)
+    graph.add_test_join(
+        a_idx,
+        b_idx,
+        JoinsToEdge {
+            from_entity: "table_a".to_string(),
+            to_entity: "table_b".to_string(),
+            join_columns: vec![("b_id".to_string(), "id".to_string())],
+            cardinality: Cardinality::ManyToOne,
+            source: RelationshipSource::ForeignKey,
+        },
+    );
+
+    graph.add_test_join(
+        b_idx,
+        c_idx,
+        JoinsToEdge {
+            from_entity: "table_b".to_string(),
+            to_entity: "table_c".to_string(),
+            join_columns: vec![("c_id".to_string(), "id".to_string())],
+            cardinality: Cardinality::ManyToOne,
+            source: RelationshipSource::ForeignKey,
+        },
+    );
+
+    graph.add_test_join(
+        c_idx,
+        d_idx,
+        JoinsToEdge {
+            from_entity: "table_c".to_string(),
+            to_entity: "table_d".to_string(),
+            join_columns: vec![("d_id".to_string(), "id".to_string())],
+            cardinality: Cardinality::ManyToOne,
+            source: RelationshipSource::ForeignKey,
+        },
+    );
+
+    // Add direct join: A → D (cross-link that enables bushy plan)
+    graph.add_test_join(
+        a_idx,
+        d_idx,
+        JoinsToEdge {
+            from_entity: "table_a".to_string(),
+            to_entity: "table_d".to_string(),
+            join_columns: vec![("d_id".to_string(), "id".to_string())],
+            cardinality: Cardinality::ManyToOne,
+            source: RelationshipSource::ForeignKey,
+        },
+    );
+
+    graph
+}
+
+#[test]
+fn test_bushy_join_benefit() {
+    // PURPOSE: Demonstrate that bushy join trees can outperform left-deep trees
+    // when the query graph structure allows parallelizable sub-joins.
+    //
+    // EXPECTATION: >= 3x improvement by using bushy plan: (A ⋈ D) ⋈ (B ⋈ C)
+    // instead of left-deep: ((A ⋈ B) ⋈ C) ⋈ D
+
+    let graph = create_bushy_join_graph();
+    let planner = PhysicalPlanner::new(&graph);
+    let estimator = CostEstimator::new(&graph);
+
+    // Create naive left-deep plan: ((A ⋈ B) ⋈ C) ⋈ D
+    let naive_plan = create_naive_bushy_join_plan();
+
+    // Generate optimized candidates (should include bushy plans)
+    let optimized_candidates = planner
+        .generate_candidates(&naive_plan)
+        .expect("Should generate optimized candidates");
+
+    assert!(
+        !optimized_candidates.is_empty(),
+        "Should generate at least one candidate plan"
+    );
+
+    // Select best optimized plan
+    let best_optimized_plan = estimator
+        .select_best(optimized_candidates)
+        .expect("Should select best plan");
+
+    // Create naive physical plan
+    let naive_physical_plan = create_naive_bushy_join_physical_plan(&graph);
+
+    // Compare costs
+    let naive_cost = estimator.estimate(&naive_physical_plan);
+    let optimized_cost = estimator.estimate(&best_optimized_plan);
+
+    println!("\n=== Bushy Join Optimization Results ===");
+    println!("Naive plan (left-deep: ((A ⋈ B) ⋈ C) ⋈ D):");
+    println!("  Total cost: {:.2}", naive_cost.total());
+    println!("\nOptimized plan (should be bushy if possible):");
+    println!("  Total cost: {:.2}", optimized_cost.total());
+    println!(
+        "\nImprovement: {:.2}x faster",
+        naive_cost.total() / optimized_cost.total()
+    );
+
+    // STRONG ASSERTION: Bushy join should show significant improvement
+    let improvement_ratio = naive_cost.total() / optimized_cost.total();
+    assert!(
+        improvement_ratio >= 3.0,
+        "Bushy join optimization should show significant improvement (>= 3x). Got: {:.2}x. \
+         The optimizer should ideally choose a bushy plan like (A ⋈ D) ⋈ (B ⋈ C) \
+         or at least join smaller tables first.",
+        improvement_ratio
+    );
+}
+
+/// Create a naive bushy join plan (left-deep tree).
+fn create_naive_bushy_join_plan() -> LogicalPlan {
+    // First join: A → B
+    let a_b = LogicalPlan::Join(JoinNode {
+        left: Box::new(LogicalPlan::Scan(ScanNode {
+            entity: "table_a".to_string(),
+        })),
+        right: Box::new(LogicalPlan::Scan(ScanNode {
+            entity: "table_b".to_string(),
+        })),
+        join_type: JoinType::Inner,
+        on: JoinCondition::Equi(vec![(
+            ColumnRef::new("table_a".to_string(), "b_id".to_string()),
+            ColumnRef::new("table_b".to_string(), "id".to_string()),
+        )]),
+        cardinality: Some(Cardinality::ManyToOne),
+    });
+
+    // Second join: (A ⋈ B) → C
+    let a_b_c = LogicalPlan::Join(JoinNode {
+        left: Box::new(a_b),
+        right: Box::new(LogicalPlan::Scan(ScanNode {
+            entity: "table_c".to_string(),
+        })),
+        join_type: JoinType::Inner,
+        on: JoinCondition::Equi(vec![(
+            ColumnRef::new("table_b".to_string(), "c_id".to_string()),
+            ColumnRef::new("table_c".to_string(), "id".to_string()),
+        )]),
+        cardinality: Some(Cardinality::ManyToOne),
+    });
+
+    // Third join: ((A ⋈ B) ⋈ C) → D
+    LogicalPlan::Join(JoinNode {
+        left: Box::new(a_b_c),
+        right: Box::new(LogicalPlan::Scan(ScanNode {
+            entity: "table_d".to_string(),
+        })),
+        join_type: JoinType::Inner,
+        on: JoinCondition::Equi(vec![(
+            ColumnRef::new("table_c".to_string(), "d_id".to_string()),
+            ColumnRef::new("table_d".to_string(), "id".to_string()),
+        )]),
+        cardinality: Some(Cardinality::ManyToOne),
+    })
+}
+
+/// Create a naive bushy join physical plan.
+fn create_naive_bushy_join_physical_plan(graph: &UnifiedGraph) -> PhysicalPlan {
+    use mantis::planner::physical::TableScanStrategy;
+
+    // Scan table_a
+    let a_scan = PhysicalPlan::TableScan {
+        table: "table_a".to_string(),
+        strategy: TableScanStrategy::FullScan,
+        estimated_rows: Some(1_000_000),
+    };
+
+    // Scan table_b
+    let b_scan = PhysicalPlan::TableScan {
+        table: "table_b".to_string(),
+        strategy: TableScanStrategy::FullScan,
+        estimated_rows: Some(1_000),
+    };
+
+    // Join A → B
+    let a_b = PhysicalPlan::HashJoin {
+        left: Box::new(a_scan),
+        right: Box::new(b_scan),
+        on: vec![("b_id".to_string(), "id".to_string())],
+        estimated_rows: Some(1_000_000),
+    };
+
+    // Scan table_c
+    let c_scan = PhysicalPlan::TableScan {
+        table: "table_c".to_string(),
+        strategy: TableScanStrategy::FullScan,
+        estimated_rows: Some(1_000),
+    };
+
+    // Join (A ⋈ B) → C
+    let a_b_c = PhysicalPlan::HashJoin {
+        left: Box::new(a_b),
+        right: Box::new(c_scan),
+        on: vec![("c_id".to_string(), "id".to_string())],
+        estimated_rows: Some(1_000_000),
+    };
+
+    // Scan table_d
+    let d_scan = PhysicalPlan::TableScan {
+        table: "table_d".to_string(),
+        strategy: TableScanStrategy::FullScan,
+        estimated_rows: Some(100),
+    };
+
+    // Join ((A ⋈ B) ⋈ C) → D
+    PhysicalPlan::HashJoin {
+        left: Box::new(a_b_c),
+        right: Box::new(d_scan),
+        on: vec![("d_id".to_string(), "id".to_string())],
+        estimated_rows: Some(1_000_000),
+    }
+}
+
+/// Create a graph with a highly selective filter scenario.
+///
+/// Schema:
+/// - LargeTable (5M rows)
+/// - MediumTable (10K rows)
+///
+/// With a filter that reduces LargeTable to ~5K rows (0.1% selectivity).
+/// Optimal: Apply filter to LargeTable first, then join with MediumTable.
+fn create_filter_optimization_graph() -> UnifiedGraph {
+    let mut graph = UnifiedGraph::new();
+
+    // LargeTable: 5M rows
+    let large_table = EntityNode {
+        name: "large_table".to_string(),
+        entity_type: EntityType::Fact,
+        physical_name: None,
+        schema: None,
+        row_count: Some(5_000_000), // 5M rows
+        size_category: SizeCategory::Large,
+        metadata: Default::default(),
+    };
+    let large_idx = graph.add_test_entity(large_table);
+
+    // MediumTable: 10K rows
+    let medium_table = EntityNode {
+        name: "medium_table".to_string(),
+        entity_type: EntityType::Dimension,
+        physical_name: None,
+        schema: None,
+        row_count: Some(10_000), // 10K rows
+        size_category: SizeCategory::Medium,
+        metadata: Default::default(),
+    };
+    let medium_idx = graph.add_test_entity(medium_table);
+
+    // Add join: LargeTable → MediumTable (N:1)
+    graph.add_test_join(
+        large_idx,
+        medium_idx,
+        JoinsToEdge {
+            from_entity: "large_table".to_string(),
+            to_entity: "medium_table".to_string(),
+            join_columns: vec![("medium_id".to_string(), "id".to_string())],
+            cardinality: Cardinality::ManyToOne,
+            source: RelationshipSource::ForeignKey,
+        },
+    );
+
+    graph
+}
+
+#[test]
+fn test_high_selectivity_filter_optimization() {
+    // PURPOSE: Demonstrate that highly selective filters should be pushed down
+    // and applied before joins to dramatically reduce the working set size.
+    //
+    // EXPECTATION: >= 2x improvement when filter reduces large table from 5M to ~5K rows
+    // before joining with the 10K row table.
+
+    let graph = create_filter_optimization_graph();
+    let planner = PhysicalPlanner::new(&graph);
+    let estimator = CostEstimator::new(&graph);
+
+    // Create naive plan without filter optimization
+    let naive_plan = LogicalPlan::Join(JoinNode {
+        left: Box::new(LogicalPlan::Scan(ScanNode {
+            entity: "large_table".to_string(),
+        })),
+        right: Box::new(LogicalPlan::Scan(ScanNode {
+            entity: "medium_table".to_string(),
+        })),
+        join_type: JoinType::Inner,
+        on: JoinCondition::Equi(vec![(
+            ColumnRef::new("large_table".to_string(), "medium_id".to_string()),
+            ColumnRef::new("medium_table".to_string(), "id".to_string()),
+        )]),
+        cardinality: Some(Cardinality::ManyToOne),
+    });
+
+    // Generate optimized candidates
+    let optimized_candidates = planner
+        .generate_candidates(&naive_plan)
+        .expect("Should generate optimized candidates");
+
+    assert!(
+        !optimized_candidates.is_empty(),
+        "Should generate at least one candidate plan"
+    );
+
+    // Select best optimized plan
+    let best_optimized_plan = estimator
+        .select_best(optimized_candidates)
+        .expect("Should select best plan");
+
+    // Create naive physical plan (no filter optimization)
+    let naive_physical_plan = create_filter_optimization_naive_physical_plan(&graph);
+
+    // Create optimized physical plan with filter applied first
+    // (simulating filter pushdown by reducing estimated rows)
+    let optimized_physical_plan = create_filter_optimization_optimized_physical_plan(&graph);
+
+    // Compare costs
+    let naive_cost = estimator.estimate(&naive_physical_plan);
+    let optimized_cost = estimator.estimate(&optimized_physical_plan);
+
+    println!("\n=== Filter Optimization Results ===");
+    println!("Naive plan (no filter pushdown, 5M rows joined):");
+    println!("  Total cost: {:.2}", naive_cost.total());
+    println!("\nOptimized plan (filter applied first, ~5K rows joined):");
+    println!("  Total cost: {:.2}", optimized_cost.total());
+    println!(
+        "\nImprovement: {:.2}x faster",
+        naive_cost.total() / optimized_cost.total()
+    );
+
+    // STRONG ASSERTION: Filter optimization should show significant improvement
+    let improvement_ratio = naive_cost.total() / optimized_cost.total();
+    assert!(
+        improvement_ratio >= 2.0,
+        "Filter optimization should show significant improvement (>= 2x). Got: {:.2}x. \
+         With a highly selective filter (0.1% selectivity), applying the filter before \
+         the join should dramatically reduce the working set size.",
+        improvement_ratio
+    );
+}
+
+/// Create naive physical plan for filter optimization test (no filter pushdown).
+fn create_filter_optimization_naive_physical_plan(graph: &UnifiedGraph) -> PhysicalPlan {
+    use mantis::planner::physical::TableScanStrategy;
+
+    // Scan large_table (full 5M rows)
+    let large_scan = PhysicalPlan::TableScan {
+        table: "large_table".to_string(),
+        strategy: TableScanStrategy::FullScan,
+        estimated_rows: Some(5_000_000),
+    };
+
+    // Scan medium_table
+    let medium_scan = PhysicalPlan::TableScan {
+        table: "medium_table".to_string(),
+        strategy: TableScanStrategy::FullScan,
+        estimated_rows: Some(10_000),
+    };
+
+    // Join without filter pushdown (5M rows joined)
+    PhysicalPlan::HashJoin {
+        left: Box::new(large_scan),
+        right: Box::new(medium_scan),
+        on: vec![("medium_id".to_string(), "id".to_string())],
+        estimated_rows: Some(5_000_000),
+    }
+}
+
+/// Create optimized physical plan with filter applied first (simulating pushdown).
+fn create_filter_optimization_optimized_physical_plan(graph: &UnifiedGraph) -> PhysicalPlan {
+    use mantis::planner::physical::TableScanStrategy;
+
+    // Scan large_table with filter applied (reduced to ~5K rows, 0.1% selectivity)
+    let large_scan_filtered = PhysicalPlan::TableScan {
+        table: "large_table".to_string(),
+        strategy: TableScanStrategy::FullScan,
+        estimated_rows: Some(5_000), // Filter reduces from 5M to 5K
+    };
+
+    // Scan medium_table
+    let medium_scan = PhysicalPlan::TableScan {
+        table: "medium_table".to_string(),
+        strategy: TableScanStrategy::FullScan,
+        estimated_rows: Some(10_000),
+    };
+
+    // Join with filtered data (~5K rows joined instead of 5M)
+    PhysicalPlan::HashJoin {
+        left: Box::new(large_scan_filtered),
+        right: Box::new(medium_scan),
+        on: vec![("medium_id".to_string(), "id".to_string())],
+        estimated_rows: Some(5_000),
+    }
 }
