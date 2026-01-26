@@ -3,6 +3,7 @@
 mod builder;
 mod plan;
 
+pub use builder::PlanBuilder;
 pub use plan::*;
 
 use crate::model::Report;

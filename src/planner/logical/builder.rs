@@ -2,8 +2,8 @@
 
 use crate::model::{Report, ShowItem};
 use crate::planner::logical::{
-    AggregateNode, LogicalPlan, MeasureRef, OrderRef, ProjectNode, ProjectionItem, ScanNode,
-    SortNode,
+    AggregateNode, ColumnRef, LogicalPlan, MeasureRef, OrderRef, ProjectNode, ProjectionItem,
+    ScanNode, SortNode,
 };
 use crate::planner::{PlanError, PlanResult};
 use crate::semantic::graph::UnifiedGraph;
@@ -81,11 +81,47 @@ impl<'a> PlanBuilder<'a> {
             return Ok(input);
         }
 
+        // Extract GROUP BY columns from report.group
+        let group_by = self.extract_group_by(report)?;
+
         Ok(LogicalPlan::Aggregate(AggregateNode {
             input: Box::new(input),
-            group_by: vec![], // TODO: handle GROUP BY
+            group_by,
             measures,
         }))
+    }
+
+    fn extract_group_by(&self, report: &Report) -> PlanResult<Vec<ColumnRef>> {
+        use crate::model::GroupItem;
+
+        let mut group_by = Vec::new();
+
+        // Extract columns from report.group (explicit grouping)
+        for group_item in &report.group {
+            match group_item {
+                GroupItem::InlineSlicer { name, .. } => {
+                    // Assume column belongs to first table for now
+                    if let Some(entity) = report.from.first() {
+                        group_by.push(ColumnRef {
+                            entity: entity.clone(),
+                            column: name.clone(),
+                        });
+                    }
+                }
+                GroupItem::DrillPathRef { level, .. } => {
+                    // For drill paths, use the level name as the column
+                    // Assume it belongs to first table for now
+                    if let Some(entity) = report.from.first() {
+                        group_by.push(ColumnRef {
+                            entity: entity.clone(),
+                            column: level.clone(),
+                        });
+                    }
+                }
+            }
+        }
+
+        Ok(group_by)
     }
 
     fn build_project(&self, input: LogicalPlan, report: &Report) -> PlanResult<LogicalPlan> {

@@ -428,3 +428,64 @@ fn test_filter_structure_correctness() {
         _ => panic!("Expected PhysicalPlan::Filter"),
     }
 }
+
+// Task 10: Test multiple predicates combined with AND
+#[test]
+fn test_filter_multiple_predicates_combined_with_and() {
+    // RED: Test for WHERE with multiple predicates: amount > 100 AND region = 'WEST'
+    let graph = create_test_graph();
+    let planner = PhysicalPlanner::new(&graph);
+
+    let predicate1 = ModelExpr::BinaryOp {
+        left: Box::new(ModelExpr::Column {
+            entity: Some("sales".to_string()),
+            column: "amount".to_string(),
+        }),
+        op: BinaryOp::Gt,
+        right: Box::new(ModelExpr::Literal(Literal::Int(100))),
+    };
+
+    let predicate2 = ModelExpr::BinaryOp {
+        left: Box::new(ModelExpr::Column {
+            entity: Some("sales".to_string()),
+            column: "region".to_string(),
+        }),
+        op: BinaryOp::Eq,
+        right: Box::new(ModelExpr::Literal(Literal::String("WEST".to_string()))),
+    };
+
+    let logical_plan = LogicalPlan::Filter(FilterNode {
+        input: Box::new(LogicalPlan::Scan(ScanNode {
+            entity: "sales".to_string(),
+        })),
+        predicates: vec![predicate1, predicate2],
+    });
+
+    let physical_plans = planner.generate_candidates(&logical_plan).unwrap();
+    let plan = &physical_plans[0];
+
+    let query = plan.to_query();
+    let sql = query.to_sql(Dialect::Postgres);
+
+    // Should combine predicates with AND
+    assert!(
+        sql.contains("WHERE"),
+        "Query should contain WHERE clause, got: {}",
+        sql
+    );
+    assert!(
+        sql.contains("amount") && sql.contains("100"),
+        "Query should contain first predicate, got: {}",
+        sql
+    );
+    assert!(
+        sql.contains("region") && sql.contains("WEST"),
+        "Query should contain second predicate, got: {}",
+        sql
+    );
+    assert!(
+        sql.contains("AND"),
+        "Query should combine predicates with AND, got: {}",
+        sql
+    );
+}

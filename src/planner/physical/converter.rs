@@ -28,6 +28,7 @@ impl<'a> PhysicalConverter<'a> {
     pub fn convert(&self, logical: &LogicalPlan) -> PlanResult<Vec<PhysicalPlan>> {
         match logical {
             LogicalPlan::Scan(scan) => self.convert_scan(scan),
+            LogicalPlan::Join(join) => self.convert_join(join),
             LogicalPlan::Filter(filter) => self.convert_filter(filter),
             LogicalPlan::Aggregate(agg) => self.convert_aggregate(agg),
             LogicalPlan::Project(proj) => self.convert_project(proj),
@@ -50,6 +51,60 @@ impl<'a> PhysicalConverter<'a> {
         }])
     }
 
+    fn convert_join(
+        &self,
+        join: &crate::planner::logical::JoinNode,
+    ) -> PlanResult<Vec<PhysicalPlan>> {
+        use crate::planner::logical::JoinCondition;
+
+        // Convert join condition to column pairs
+        let on_columns: Vec<(String, String)> = match &join.on {
+            JoinCondition::Equi(pairs) => pairs
+                .iter()
+                .map(|(left, right)| {
+                    (
+                        format!("{}.{}", left.entity, left.column),
+                        format!("{}.{}", right.entity, right.column),
+                    )
+                })
+                .collect(),
+            JoinCondition::Expr(_) => {
+                return Err(PlanError::PhysicalPlanError(
+                    "Complex join expressions not yet supported".to_string(),
+                ));
+            }
+        };
+
+        // Convert left and right inputs
+        let left_candidates = self.convert(&join.left)?;
+        let right_candidates = self.convert(&join.right)?;
+
+        // Generate physical join plans
+        let mut plans = Vec::new();
+
+        for left_plan in &left_candidates {
+            for right_plan in &right_candidates {
+                // Generate HashJoin (most common strategy)
+                plans.push(PhysicalPlan::HashJoin {
+                    left: Box::new(left_plan.clone()),
+                    right: Box::new(right_plan.clone()),
+                    on: on_columns.clone(),
+                    estimated_rows: None,
+                });
+
+                // Also generate NestedLoopJoin as alternative (for small tables)
+                plans.push(PhysicalPlan::NestedLoopJoin {
+                    left: Box::new(left_plan.clone()),
+                    right: Box::new(right_plan.clone()),
+                    on: on_columns.clone(),
+                    estimated_rows: None,
+                });
+            }
+        }
+
+        Ok(plans)
+    }
+
     fn convert_filter(
         &self,
         filter: &crate::planner::logical::FilterNode,
@@ -60,25 +115,46 @@ impl<'a> PhysicalConverter<'a> {
             ));
         }
 
-        // For now, only support single predicates to avoid silently dropping data
-        // Multiple predicates should be combined with AND in the logical plan
-        if filter.predicates.len() > 1 {
-            return Err(PlanError::PhysicalPlanError(
-                format!(
-                    "Multiple predicates not yet supported (found {}). Combine predicates with AND in logical plan.",
-                    filter.predicates.len()
-                )
-            ));
-        }
+        // Combine multiple predicates with AND
+        let combined_predicate = if filter.predicates.len() == 1 {
+            filter.predicates[0].clone()
+        } else {
+            Self::combine_predicates_with_and(&filter.predicates)
+        };
 
         let input_candidates = self.convert(&filter.input)?;
         Ok(input_candidates
             .into_iter()
             .map(|input| PhysicalPlan::Filter {
                 input: Box::new(input),
-                predicate: filter.predicates[0].clone(),
+                predicate: combined_predicate.clone(),
             })
             .collect())
+    }
+
+    /// Combine multiple predicates with AND operator.
+    fn combine_predicates_with_and(
+        predicates: &[crate::model::expr::Expr],
+    ) -> crate::model::expr::Expr {
+        use crate::model::expr::{BinaryOp, Expr};
+
+        assert!(!predicates.is_empty(), "Cannot combine empty predicates");
+
+        if predicates.len() == 1 {
+            return predicates[0].clone();
+        }
+
+        // Build nested AND tree: (p1 AND (p2 AND (p3 AND ...)))
+        let mut result = predicates[predicates.len() - 1].clone();
+        for predicate in predicates[..predicates.len() - 1].iter().rev() {
+            result = Expr::BinaryOp {
+                left: Box::new(predicate.clone()),
+                op: BinaryOp::And,
+                right: Box::new(result),
+            };
+        }
+
+        result
     }
 
     fn convert_aggregate(

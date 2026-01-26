@@ -112,6 +112,52 @@ impl PhysicalPlan {
     }
 
     /// Convert physical plan to SQL query
+    /// Extract table name from a physical plan (works for scans and joins)
+    fn extract_table_name(plan: &PhysicalPlan) -> String {
+        match plan {
+            PhysicalPlan::TableScan { table, .. } => table.clone(),
+            PhysicalPlan::HashJoin { right, .. } | PhysicalPlan::NestedLoopJoin { right, .. } => {
+                Self::extract_table_name(right)
+            }
+            _ => "unknown".to_string(),
+        }
+    }
+
+    /// Build JOIN ON condition from column pairs
+    fn build_join_condition(on: &[(String, String)]) -> crate::sql::expr::Expr {
+        use crate::sql::expr::{BinaryOperator, Expr, Literal};
+
+        if on.is_empty() {
+            // No join condition - this shouldn't happen but handle gracefully
+            return Expr::Literal(Literal::Bool(true));
+        }
+
+        // Build condition for each pair: left_col = right_col
+        let conditions: Vec<Expr> = on
+            .iter()
+            .map(|(left_col, right_col)| Expr::BinaryOp {
+                left: Box::new(col(left_col)),
+                op: BinaryOperator::Eq,
+                right: Box::new(col(right_col)),
+            })
+            .collect();
+
+        // Combine multiple conditions with AND
+        if conditions.len() == 1 {
+            conditions[0].clone()
+        } else {
+            let mut result = conditions[conditions.len() - 1].clone();
+            for condition in conditions[..conditions.len() - 1].iter().rev() {
+                result = Expr::BinaryOp {
+                    left: Box::new(condition.clone()),
+                    op: BinaryOperator::And,
+                    right: Box::new(result),
+                };
+            }
+            result
+        }
+    }
+
     pub fn to_query(&self) -> Query {
         match self {
             PhysicalPlan::TableScan { table, .. } => Query::new().from(TableRef::new(table)),
@@ -182,13 +228,27 @@ impl PhysicalPlan {
                 }
                 query
             }
-            PhysicalPlan::HashJoin { left, .. } | PhysicalPlan::NestedLoopJoin { left, .. } => {
-                // Simple join: start with left, add right as join
-                // TODO: Add proper join conditions when Query builder supports it
-                let left_query = left.to_query();
-                // For now, just use left query
-                // This is a stub - real implementation needs join support in Query
-                left_query
+            PhysicalPlan::HashJoin {
+                left, right, on, ..
+            }
+            | PhysicalPlan::NestedLoopJoin {
+                left, right, on, ..
+            } => {
+                use crate::sql::expr::BinaryOperator;
+
+                // Start with left query
+                let mut query = left.to_query();
+
+                // Extract right table name
+                let right_table = Self::extract_table_name(right);
+
+                // Build join condition from column pairs
+                let join_condition = Self::build_join_condition(on);
+
+                // Add INNER JOIN with ON clause
+                query = query.inner_join(TableRef::new(&right_table), join_condition);
+
+                query
             }
         }
     }
