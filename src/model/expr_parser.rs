@@ -64,6 +64,59 @@ fn preprocess_sql_for_parsing(sql: &str) -> String {
 
 // Helper functions will be added in subsequent tasks
 
+/// Convert sqlparser binary operator to our BinaryOp type
+fn convert_binary_op(op: &sql::BinaryOperator, span: Span) -> ParseResult<BinaryOp> {
+    match op {
+        // Arithmetic
+        sql::BinaryOperator::Plus => Ok(BinaryOp::Add),
+        sql::BinaryOperator::Minus => Ok(BinaryOp::Sub),
+        sql::BinaryOperator::Multiply => Ok(BinaryOp::Mul),
+        sql::BinaryOperator::Divide => Ok(BinaryOp::Div),
+        sql::BinaryOperator::Modulo => Ok(BinaryOp::Mod),
+
+        // Comparison
+        sql::BinaryOperator::Eq => Ok(BinaryOp::Eq),
+        sql::BinaryOperator::NotEq => Ok(BinaryOp::Ne),
+        sql::BinaryOperator::Lt => Ok(BinaryOp::Lt),
+        sql::BinaryOperator::LtEq => Ok(BinaryOp::Le),
+        sql::BinaryOperator::Gt => Ok(BinaryOp::Gt),
+        sql::BinaryOperator::GtEq => Ok(BinaryOp::Ge),
+
+        // Logical
+        sql::BinaryOperator::And => Ok(BinaryOp::And),
+        sql::BinaryOperator::Or => Ok(BinaryOp::Or),
+
+        // String
+        sql::BinaryOperator::Like => Ok(BinaryOp::Like),
+        sql::BinaryOperator::NotLike => Ok(BinaryOp::NotLike),
+
+        unsupported => Err(ParseError::UnsupportedFeature {
+            feature: format!("Binary operator: {:?}", unsupported),
+            span,
+        }),
+    }
+}
+
+/// Convert sqlparser unary operator to our UnaryOp type
+fn convert_unary_op(op: &sql::UnaryOperator, span: Span) -> ParseResult<UnaryOp> {
+    match op {
+        sql::UnaryOperator::Not => Ok(UnaryOp::Not),
+        sql::UnaryOperator::Minus => Ok(UnaryOp::Neg),
+        sql::UnaryOperator::Plus => {
+            // Unary plus is a no-op, but sqlparser doesn't support this directly
+            // We'll handle this in convert_expr by ignoring it
+            Err(ParseError::UnsupportedFeature {
+                feature: "Unary plus operator".to_string(),
+                span,
+            })
+        }
+        unsupported => Err(ParseError::UnsupportedFeature {
+            feature: format!("Unary operator: {:?}", unsupported),
+            span,
+        }),
+    }
+}
+
 /// Convert sqlparser literal to our Literal type
 fn convert_literal(val: &sql::Value, span: Span) -> ParseResult<Expr> {
     match val {
@@ -158,5 +211,57 @@ mod tests {
         let sql_lit = sql::Value::Null;
         let result = convert_literal(&sql_lit, 0..4).unwrap();
         assert_eq!(result, Expr::Literal(Literal::Null));
+    }
+
+    #[test]
+    fn test_convert_binary_op_arithmetic() {
+        assert_eq!(
+            convert_binary_op(&sql::BinaryOperator::Plus, 0..1).unwrap(),
+            BinaryOp::Add
+        );
+        assert_eq!(
+            convert_binary_op(&sql::BinaryOperator::Minus, 0..1).unwrap(),
+            BinaryOp::Sub
+        );
+        assert_eq!(
+            convert_binary_op(&sql::BinaryOperator::Multiply, 0..1).unwrap(),
+            BinaryOp::Mul
+        );
+        assert_eq!(
+            convert_binary_op(&sql::BinaryOperator::Divide, 0..1).unwrap(),
+            BinaryOp::Div
+        );
+    }
+
+    #[test]
+    fn test_convert_binary_op_comparison() {
+        assert_eq!(
+            convert_binary_op(&sql::BinaryOperator::Eq, 0..1).unwrap(),
+            BinaryOp::Eq
+        );
+        assert_eq!(
+            convert_binary_op(&sql::BinaryOperator::NotEq, 0..2).unwrap(),
+            BinaryOp::Ne
+        );
+        assert_eq!(
+            convert_binary_op(&sql::BinaryOperator::Lt, 0..1).unwrap(),
+            BinaryOp::Lt
+        );
+        assert_eq!(
+            convert_binary_op(&sql::BinaryOperator::Gt, 0..1).unwrap(),
+            BinaryOp::Gt
+        );
+    }
+
+    #[test]
+    fn test_convert_unary_op() {
+        assert_eq!(
+            convert_unary_op(&sql::UnaryOperator::Not, 0..3).unwrap(),
+            UnaryOp::Not
+        );
+        assert_eq!(
+            convert_unary_op(&sql::UnaryOperator::Minus, 0..1).unwrap(),
+            UnaryOp::Neg
+        );
     }
 }
