@@ -59,6 +59,26 @@ impl<'a> CostEstimator<'a> {
                     memory_cost: 0.0, // Table scan doesn't use memory
                 }
             }
+            PhysicalPlan::Filter { input, predicate } => {
+                // Get input cost
+                let input_cost = self.estimate(input);
+
+                // Estimate filter selectivity
+                let selectivity = self.estimate_filter_selectivity(predicate);
+
+                // Calculate output rows after filtering
+                let rows_out = ((input_cost.rows_out as f64) * selectivity) as usize;
+
+                CostEstimate {
+                    rows_out,
+                    // CPU cost: input CPU + evaluating predicate for each input row
+                    cpu_cost: input_cost.cpu_cost + (input_cost.rows_out as f64),
+                    // IO cost unchanged (filter doesn't add IO)
+                    io_cost: input_cost.io_cost,
+                    // Memory cost unchanged
+                    memory_cost: input_cost.memory_cost,
+                }
+            }
             _ => {
                 // For other plan types, use simple fallback for now
                 CostEstimate {
@@ -85,6 +105,79 @@ impl<'a> CostEstimator<'a> {
 
         // Fallback for unknown entities
         1_000_000
+    }
+
+    /// Estimate filter selectivity using graph metadata.
+    ///
+    /// Returns a value between 0.0 and 1.0 representing the fraction of rows
+    /// that pass the filter.
+    fn estimate_filter_selectivity(&self, predicate: &crate::model::expr::Expr) -> f64 {
+        use crate::model::expr::{BinaryOp, Expr as ModelExpr};
+
+        match predicate {
+            ModelExpr::BinaryOp { op, left, right } => match op {
+                // Equality: use column cardinality
+                BinaryOp::Eq => {
+                    if let Some(col_ref) = Self::extract_column(left) {
+                        self.estimate_equality_selectivity(&col_ref)
+                    } else if let Some(col_ref) = Self::extract_column(right) {
+                        self.estimate_equality_selectivity(&col_ref)
+                    } else {
+                        0.1 // Default for unknown equality
+                    }
+                }
+                // Range predicates
+                BinaryOp::Gt | BinaryOp::Lt | BinaryOp::Gte | BinaryOp::Lte => 0.33,
+                // Logical AND: multiply selectivities
+                BinaryOp::And => {
+                    let left_sel = self.estimate_filter_selectivity(left);
+                    let right_sel = self.estimate_filter_selectivity(right);
+                    left_sel * right_sel
+                }
+                // Logical OR: probability union
+                BinaryOp::Or => {
+                    let left_sel = self.estimate_filter_selectivity(left);
+                    let right_sel = self.estimate_filter_selectivity(right);
+                    left_sel + right_sel - (left_sel * right_sel)
+                }
+                // Other operators: default estimate
+                _ => 0.5,
+            },
+            // Other expression types: default estimate
+            _ => 0.5,
+        }
+    }
+
+    /// Estimate selectivity for equality predicates based on column cardinality.
+    fn estimate_equality_selectivity(&self, col_qualified: &str) -> f64 {
+        // Check if column is high or low cardinality
+        if let Ok(is_high_card) = self.graph.is_high_cardinality(col_qualified) {
+            if is_high_card {
+                0.001 // High cardinality: very selective (1 in 1000)
+            } else {
+                0.1 // Low cardinality: less selective (1 in 10)
+            }
+        } else {
+            0.1 // Default for unknown columns
+        }
+    }
+
+    /// Extract column reference from an expression.
+    ///
+    /// Returns the qualified name (entity.column) if the expression is a column reference.
+    fn extract_column(expr: &crate::model::expr::Expr) -> Option<String> {
+        use crate::model::expr::Expr as ModelExpr;
+
+        match expr {
+            ModelExpr::Column { entity, column } => {
+                if let Some(e) = entity {
+                    Some(format!("{}.{}", e, column))
+                } else {
+                    Some(column.clone())
+                }
+            }
+            _ => None,
+        }
     }
 
     pub fn select_best(&self, candidates: Vec<PhysicalPlan>) -> PlanResult<PhysicalPlan> {

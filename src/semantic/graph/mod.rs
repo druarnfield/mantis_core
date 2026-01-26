@@ -119,6 +119,18 @@ impl UnifiedGraph {
     pub fn add_test_join(&mut self, from: NodeIndex, to: NodeIndex, edge: JoinsToEdge) {
         self.graph.add_edge(from, to, GraphEdge::JoinsTo(edge));
     }
+
+    /// Add a column node to the graph (test helper).
+    ///
+    /// Note: Only use this in tests. For production, use `from_model_with_inference`.
+    #[doc(hidden)]
+    pub fn add_test_column(&mut self, column: ColumnNode) -> NodeIndex {
+        let qualified_name = column.qualified_name();
+        let idx = self.graph.add_node(GraphNode::Column(column.clone()));
+        self.column_index.insert(qualified_name.clone(), idx);
+        self.node_index.insert(qualified_name, idx);
+        idx
+    }
 }
 
 // TODO: Fix these tests - SqlExpr type was removed/renamed during refactoring
