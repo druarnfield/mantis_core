@@ -285,6 +285,53 @@ fn convert_expr(sql_expr: &sql::Expr, span: Span) -> ParseResult<Expr> {
         // Function calls
         sql::Expr::Function(func) => convert_function(func, span),
 
+        // CASE expression
+        sql::Expr::Case {
+            operand,
+            conditions,
+            results,
+            else_result,
+        } => {
+            // Convert operand if present (simple CASE form)
+            let operand_expr = operand
+                .as_ref()
+                .map(|e| convert_expr(e, span.clone()))
+                .transpose()?
+                .map(Box::new);
+
+            // Convert WHEN clauses
+            if conditions.len() != results.len() {
+                return Err(ParseError::SqlParseError {
+                    message: "CASE conditions and results length mismatch".to_string(),
+                    span,
+                });
+            }
+
+            let when_clauses = conditions
+                .iter()
+                .zip(results.iter())
+                .map(|(cond, res)| {
+                    Ok(WhenClause {
+                        condition: convert_expr(cond, span.clone())?,
+                        result: convert_expr(res, span.clone())?,
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+
+            // Convert ELSE clause if present
+            let else_clause = else_result
+                .as_ref()
+                .map(|e| convert_expr(e, span.clone()))
+                .transpose()?
+                .map(Box::new);
+
+            Ok(Expr::Case {
+                operand: operand_expr,
+                when_clauses,
+                else_clause,
+            })
+        }
+
         // For now, return error for other types - we'll implement them in next tasks
         unsupported => Err(ParseError::UnsupportedFeature {
             feature: format!("Expression type: {:?}", unsupported),
@@ -645,6 +692,41 @@ mod tests {
                 assert!(feature.contains("UNSUPPORTED_FUNC"));
             }
             _ => panic!("Expected UnsupportedFeature error"),
+        }
+    }
+
+    #[test]
+    fn test_convert_case_expression() {
+        // CASE WHEN @status = 'active' THEN @revenue ELSE 0 END
+        let condition = sql::Expr::BinaryOp {
+            left: Box::new(sql::Expr::Identifier(sql::Ident::new("__ATOM__status"))),
+            op: sql::BinaryOperator::Eq,
+            right: Box::new(sql::Expr::Value(sql::Value::SingleQuotedString(
+                "active".to_string(),
+            ))),
+        };
+        let result_expr = sql::Expr::Identifier(sql::Ident::new("__ATOM__revenue"));
+        let else_expr = sql::Expr::Value(sql::Value::Number("0".to_string(), false));
+
+        let expr = sql::Expr::Case {
+            operand: None,
+            conditions: vec![condition],
+            results: vec![result_expr],
+            else_result: Some(Box::new(else_expr)),
+        };
+
+        let result = convert_expr(&expr, 0..54).unwrap();
+        match result {
+            Expr::Case {
+                operand,
+                when_clauses,
+                else_clause,
+            } => {
+                assert!(operand.is_none());
+                assert_eq!(when_clauses.len(), 1);
+                assert!(else_clause.is_some());
+            }
+            _ => panic!("Expected Case expression"),
         }
     }
 }
