@@ -1,23 +1,13 @@
-//! Physical planning - generates alternative execution strategies.
+//! Physical plan generation and optimization.
+
+mod plan;
+pub use plan::*;
 
 use crate::planner::logical::LogicalPlan;
-use crate::planner::PlanResult;
+use crate::planner::{PlanError, PlanResult};
 use crate::semantic::graph::UnifiedGraph;
-use crate::sql::query::Query;
 
-/// Physical plan - concrete execution strategy.
-#[derive(Debug, Clone)]
-pub struct PhysicalPlan {
-    // Placeholder
-}
-
-impl PhysicalPlan {
-    pub fn to_query(&self) -> Query {
-        Query::new()
-    }
-}
-
-/// Physical planner.
+/// Physical planner that generates execution strategies
 pub struct PhysicalPlanner<'a> {
     #[allow(dead_code)]
     graph: &'a UnifiedGraph,
@@ -28,8 +18,12 @@ impl<'a> PhysicalPlanner<'a> {
         Self { graph }
     }
 
-    pub fn generate_candidates(&self, _logical: &LogicalPlan) -> PlanResult<Vec<PhysicalPlan>> {
-        // Stub implementation
-        Ok(vec![PhysicalPlan {}])
+    pub fn generate_candidates(
+        &self,
+        _logical_plan: &LogicalPlan,
+    ) -> PlanResult<Vec<PhysicalPlan>> {
+        Err(PlanError::PhysicalPlanError(
+            "Not yet implemented".to_string(),
+        ))
     }
 }
