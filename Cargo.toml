@@ -191,3 +191,7 @@ path = "tests/planner/join_cost_test.rs"
 [[test]]
 name = "group_cost_test"
 path = "tests/planner/group_cost_test.rs"
+
+[[test]]
+name = "join_optimizer_test"
+path = "tests/planner/join_optimizer_test.rs"

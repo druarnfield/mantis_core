@@ -1,6 +1,7 @@
 //! Physical plan generation and optimization.
 
 mod converter;
+pub mod join_optimizer;
 mod plan;
 
 use converter::PhysicalConverter;
