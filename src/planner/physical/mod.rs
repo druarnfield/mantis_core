@@ -1,15 +1,17 @@
 //! Physical plan generation and optimization.
 
+mod converter;
 mod plan;
+
+use converter::PhysicalConverter;
 pub use plan::*;
 
 use crate::planner::logical::LogicalPlan;
-use crate::planner::{PlanError, PlanResult};
+use crate::planner::PlanResult;
 use crate::semantic::graph::UnifiedGraph;
 
 /// Physical planner that generates execution strategies
 pub struct PhysicalPlanner<'a> {
-    #[allow(dead_code)]
     graph: &'a UnifiedGraph,
 }
 
@@ -18,12 +20,7 @@ impl<'a> PhysicalPlanner<'a> {
         Self { graph }
     }
 
-    pub fn generate_candidates(
-        &self,
-        _logical_plan: &LogicalPlan,
-    ) -> PlanResult<Vec<PhysicalPlan>> {
-        Err(PlanError::PhysicalPlanError(
-            "Not yet implemented".to_string(),
-        ))
+    pub fn generate_candidates(&self, logical_plan: &LogicalPlan) -> PlanResult<Vec<PhysicalPlan>> {
+        PhysicalConverter::new(self.graph).convert(logical_plan)
     }
 }

@@ -15,3 +15,21 @@ fn test_table_scan_node_creation() {
 fn test_hash_join_node_creation() {
     // Test will be implemented in later tasks
 }
+
+#[test]
+fn test_convert_scan_to_physical() {
+    use mantis::planner::logical::{LogicalPlan, ScanNode};
+    use mantis::planner::physical::PhysicalPlanner;
+    use mantis::semantic::graph::UnifiedGraph;
+
+    let graph = UnifiedGraph::new();
+    let logical = LogicalPlan::Scan(ScanNode {
+        entity: "sales".to_string(),
+    });
+
+    let planner = PhysicalPlanner::new(&graph);
+    let candidates = planner.generate_candidates(&logical).unwrap();
+
+    assert!(!candidates.is_empty());
+    assert!(matches!(candidates[0], PhysicalPlan::TableScan { .. }));
+}
