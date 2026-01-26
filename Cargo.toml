@@ -199,3 +199,15 @@ path = "tests/planner/join_optimizer_test.rs"
 [[test]]
 name = "optimizer_integration_test"
 path = "tests/planner/optimizer_integration_test.rs"
+
+[[test]]
+name = "performance_test"
+path = "tests/planner/performance_test.rs"
+
+[[test]]
+name = "cost_accuracy_test"
+path = "tests/planner/cost_accuracy_test.rs"
+
+[[test]]
+name = "wave2_integration_test"
+path = "tests/planner/wave2_integration_test.rs"
