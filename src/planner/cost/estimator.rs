@@ -4,6 +4,28 @@ use crate::planner::physical::PhysicalPlan;
 use crate::planner::{PlanError, PlanResult};
 use crate::semantic::graph::UnifiedGraph;
 
+/// Multi-objective cost estimate with component breakdown.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CostEstimate {
+    /// Estimated number of output rows
+    pub rows_out: usize,
+    /// CPU cost component
+    pub cpu_cost: f64,
+    /// I/O cost component (weighted higher)
+    pub io_cost: f64,
+    /// Memory cost component (weighted lower)
+    pub memory_cost: f64,
+}
+
+impl CostEstimate {
+    /// Calculate total weighted cost.
+    ///
+    /// Weights: CPU = 1.0, IO = 10.0 (IO is expensive), Memory = 0.1 (memory is cheap)
+    pub fn total(&self) -> f64 {
+        (self.cpu_cost * 1.0) + (self.io_cost * 10.0) + (self.memory_cost * 0.1)
+    }
+}
+
 pub struct CostEstimator<'a> {
     #[allow(dead_code)]
     graph: &'a UnifiedGraph,
