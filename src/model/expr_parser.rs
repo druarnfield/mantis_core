@@ -3,13 +3,19 @@
 //! This module handles parsing SQL expressions with @atom references.
 
 use crate::dsl::Span;
-use crate::model::expr::*;
 use regex::Regex;
-use sqlparser::ast as sql;
-use sqlparser::dialect::GenericDialect;
-use sqlparser::parser::Parser;
 use std::sync::LazyLock;
 use thiserror::Error;
+
+// These imports will be used in Tasks 3-10 when conversion functions are added
+#[allow(unused_imports)]
+use crate::model::expr::*;
+#[allow(unused_imports)]
+use sqlparser::ast as sql;
+#[allow(unused_imports)]
+use sqlparser::dialect::GenericDialect;
+#[allow(unused_imports)]
+use sqlparser::parser::Parser;
 
 /// Pattern for detecting @atom references (e.g., @revenue)
 static ATOM_PATTERN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"@(\w+)").unwrap());
