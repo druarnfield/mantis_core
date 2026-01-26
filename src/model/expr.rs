@@ -226,6 +226,81 @@ impl Expr {
     pub fn is_not_null(self) -> Self {
         Self::unary(UnaryOp::IsNotNull, self)
     }
+
+    // === Validation methods ===
+
+    /// Walk the expression tree, calling visitor on each node.
+    pub fn walk<F>(&self, visitor: &mut F)
+    where
+        F: FnMut(&Expr),
+    {
+        visitor(self);
+        match self {
+            Expr::AtomRef(_) | Expr::Column { .. } | Expr::Literal(_) => {}
+            Expr::Function { args, .. } => {
+                for arg in args {
+                    arg.walk(visitor);
+                }
+            }
+            Expr::BinaryOp { left, right, .. } => {
+                left.walk(visitor);
+                right.walk(visitor);
+            }
+            Expr::UnaryOp { expr, .. } => {
+                expr.walk(visitor);
+            }
+            Expr::Case {
+                conditions,
+                else_expr,
+            } => {
+                for (cond, then) in conditions {
+                    cond.walk(visitor);
+                    then.walk(visitor);
+                }
+                if let Some(else_e) = else_expr {
+                    else_e.walk(visitor);
+                }
+            }
+            Expr::Cast { expr, .. } => {
+                expr.walk(visitor);
+            }
+        }
+    }
+
+    /// Validate this expression is appropriate for the given context.
+    pub fn validate_context(
+        &self,
+        context: crate::model::expr_validation::ExprContext,
+    ) -> Result<(), crate::model::expr_validation::ValidationError> {
+        use crate::model::expr_validation::{ExprContext, ValidationError};
+
+        match context {
+            ExprContext::Filter | ExprContext::CalculatedSlicer => {
+                if self.contains_aggregate() {
+                    return Err(ValidationError::AggregateNotAllowed { context });
+                }
+            }
+            ExprContext::Measure => {
+                // Measures typically should have aggregates, but not required
+            }
+        }
+        Ok(())
+    }
+
+    /// Check if this expression contains any aggregate functions.
+    pub fn contains_aggregate(&self) -> bool {
+        let mut has_agg = false;
+        self.walk(&mut |expr| {
+            if let Expr::Function {
+                func: Func::Aggregate(_),
+                ..
+            } = expr
+            {
+                has_agg = true;
+            }
+        });
+        has_agg
+    }
 }
 
 // =============================================================================
