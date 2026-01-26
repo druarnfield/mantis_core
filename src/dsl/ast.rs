@@ -378,6 +378,9 @@ pub struct Attribute {
 }
 
 /// Data types for attributes and slicers.
+///
+/// NOTE: Serialize/Deserialize are required because this type is used in
+/// model::expr::Expr which needs to be serializable for model persistence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DataType {
     String,
@@ -403,6 +406,11 @@ impl DataType {
             "timestamp" => Some(DataType::Timestamp),
             _ => None,
         }
+    }
+
+    /// Alias for from_str (used by inference engine).
+    pub fn parse(s: &str) -> Option<Self> {
+        Self::from_str(s)
     }
 }
 

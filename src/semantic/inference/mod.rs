@@ -20,13 +20,14 @@
 //! ```
 
 mod engine;
-mod model_integration;
+// TODO: Re-enable when model module is updated with Relationship and SourceEntity types
+// mod model_integration;
 mod rules;
 mod scoring;
 pub mod signals;
 
 pub use engine::{ColumnInfo, InferenceConfig, InferenceEngine, TableInfo, WeightPreset};
-pub use model_integration::{InferenceResult, ModelInferenceConfig};
+// pub use model_integration::{InferenceResult, ModelInferenceConfig};
 pub use rules::{default_rules, InferenceRule, RuleMatch};
 pub use scoring::{ConfidenceScore, ScoringFactors};
 

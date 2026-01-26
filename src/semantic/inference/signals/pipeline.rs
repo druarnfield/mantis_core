@@ -28,15 +28,7 @@ use super::{
 fn is_grain_compatible_type(data_type: Option<&DataType>) -> bool {
     match data_type {
         None => true, // Unknown type, assume compatible
-        Some(dt) => !matches!(
-            dt,
-            DataType::Float32
-                | DataType::Float64
-                | DataType::Decimal(_, _)
-                | DataType::Bool
-                | DataType::Binary
-                | DataType::Json
-        ),
+        Some(dt) => !matches!(dt, DataType::Float | DataType::Decimal | DataType::Bool),
     }
 }
 
@@ -395,9 +387,9 @@ impl SignalPipeline {
 
         // 3. Check for negative signals
         if self.config.use_negative_signals {
-            if let Some(neg_signal) =
-                self.negative_detector
-                    .check(&candidate.from_column, candidate.from_type.as_ref())
+            if let Some(neg_signal) = self
+                .negative_detector
+                .check(&candidate.from_column, candidate.from_type.as_ref())
             {
                 signals.add(neg_signal);
             }
@@ -414,7 +406,10 @@ impl SignalPipeline {
             signals.add(Signal::positive(
                 SignalSource::UniqueConstraint,
                 0.6,
-                format!("Target column '{}' has unique constraint", candidate.to_column),
+                format!(
+                    "Target column '{}' has unique constraint",
+                    candidate.to_column
+                ),
             ));
         }
 
@@ -483,7 +478,10 @@ impl SignalPipeline {
                     // Check if target is PK
                     let to_is_pk = table_pk_columns
                         .get(&m.target_table)
-                        .map(|pks| pks.iter().any(|pk| pk.eq_ignore_ascii_case(&m.target_column)))
+                        .map(|pks| {
+                            pks.iter()
+                                .any(|pk| pk.eq_ignore_ascii_case(&m.target_column))
+                        })
                         .unwrap_or(false);
 
                     candidates.push(RelationshipCandidate {
@@ -557,7 +555,9 @@ impl SignalPipeline {
 
                 // Check type compatibility if both types are known
                 let types_compatible = match (column_type, col_type) {
-                    (Some(from_t), Some(to_t)) => TypeCompatibility::check(from_t, to_t).is_compatible,
+                    (Some(from_t), Some(to_t)) => {
+                        TypeCompatibility::check(from_t, to_t).is_compatible
+                    }
                     _ => true, // If types unknown, assume compatible
                 };
 

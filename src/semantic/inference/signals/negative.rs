@@ -73,11 +73,8 @@ impl DataTypeCategory {
     fn from_datatype(dt: &DataType) -> Option<Self> {
         match dt {
             DataType::Bool => Some(Self::Boolean),
-            DataType::Date | DataType::Time | DataType::Timestamp | DataType::TimestampTz => {
-                Some(Self::Temporal)
-            }
-            DataType::Json => Some(Self::Json),
-            DataType::Binary => Some(Self::Binary),
+            DataType::Date | DataType::Timestamp => Some(Self::Temporal),
+            // Current DataType doesn't have Json or Binary variants
             _ => None,
         }
     }
@@ -184,7 +181,11 @@ impl NegativeSignalDetector {
             // === Status columns ===
             ExclusionPattern {
                 name: "status_type".into(),
-                matcher: PatternMatcher::AnyOf(vec!["status".into(), "state".into(), "type".into()]),
+                matcher: PatternMatcher::AnyOf(vec![
+                    "status".into(),
+                    "state".into(),
+                    "type".into(),
+                ]),
                 penalty: 0.5, // Could be FK to lookup table
             },
             // === Internal IDs ===
@@ -245,8 +246,18 @@ impl NegativeSignalDetector {
         .collect();
 
         let excluded_keywords = [
-            "temp", "tmp", "old", "backup", "archive", "test", "dummy", "sample", "example", "mock",
-            "deprecated", "legacy",
+            "temp",
+            "tmp",
+            "old",
+            "backup",
+            "archive",
+            "test",
+            "dummy",
+            "sample",
+            "example",
+            "mock",
+            "deprecated",
+            "legacy",
         ]
         .into_iter()
         .map(String::from)

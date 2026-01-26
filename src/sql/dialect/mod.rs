@@ -301,29 +301,20 @@ pub trait SqlDialect: std::fmt::Debug {
     /// Emit a data type for this dialect.
     ///
     /// Different databases use different type names:
-    /// - `Int64` → BIGINT (all), INTEGER (DuckDB)
+    /// - `Int` → BIGINT (default)
     /// - `String` → TEXT (PostgreSQL/DuckDB), VARCHAR(MAX) (T-SQL), TEXT (MySQL)
     fn emit_data_type(&self, dt: &crate::model::types::DataType) -> String {
         use crate::model::types::DataType;
+        // TODO: Update when detailed SQL DataType is available
+        // Current DataType only has: String, Int, Decimal, Float, Bool, Date, Timestamp
         match dt {
             DataType::Bool => "BOOLEAN".into(),
-            DataType::Int8 => "TINYINT".into(),
-            DataType::Int16 => "SMALLINT".into(),
-            DataType::Int32 => "INTEGER".into(),
-            DataType::Int64 => "BIGINT".into(),
-            DataType::Float32 => "REAL".into(),
-            DataType::Float64 => "DOUBLE PRECISION".into(),
-            DataType::Decimal(p, s) => format!("DECIMAL({}, {})", p, s),
+            DataType::Int => "BIGINT".into(),
+            DataType::Float => "DOUBLE PRECISION".into(),
+            DataType::Decimal => "DECIMAL(18, 2)".into(),
             DataType::String => "TEXT".into(),
-            DataType::Char(len) => format!("CHAR({})", len),
-            DataType::Varchar(len) => format!("VARCHAR({})", len),
             DataType::Date => "DATE".into(),
-            DataType::Time => "TIME".into(),
             DataType::Timestamp => "TIMESTAMP".into(),
-            DataType::TimestampTz => "TIMESTAMP WITH TIME ZONE".into(),
-            DataType::Binary => "BYTEA".into(),
-            DataType::Json => "JSON".into(),
-            DataType::Uuid => "UUID".into(),
         }
     }
 

@@ -32,16 +32,10 @@ pub enum SemanticError {
     UnknownEntity(String),
 
     /// Referenced a field that doesn't exist on an entity.
-    UnknownField {
-        entity: String,
-        field: String,
-    },
+    UnknownField { entity: String, field: String },
 
     /// Could not find a join path between entities.
-    NoPath {
-        from: String,
-        to: String,
-    },
+    NoPath { from: String, to: String },
 
     /// The join path would cause row multiplication (fan-out).
     UnsafeJoinPath {
@@ -51,9 +45,7 @@ pub enum SemanticError {
     },
 
     /// Column used in select without being in GROUP BY.
-    UngroupedColumn {
-        column: String,
-    },
+    UngroupedColumn { column: String },
 
     /// Ambiguous field reference (exists on multiple entities).
     AmbiguousField {
@@ -178,8 +170,12 @@ impl fmt::Display for SemanticError {
                 write!(
                     f,
                     "Type mismatch in join: {}.{} ({}) cannot join with {}.{} ({})",
-                    details.left_entity, details.left_column, details.left_type,
-                    details.right_entity, details.right_column, details.right_type
+                    details.left_entity,
+                    details.left_column,
+                    details.left_type,
+                    details.right_entity,
+                    details.right_column,
+                    details.right_type
                 )
             }
             SemanticError::UnknownQuery { name } => {
@@ -191,7 +187,12 @@ impl fmt::Display for SemanticError {
             SemanticError::ColumnLineageCycle { cycles } => {
                 writeln!(f, "Circular dependencies detected in column lineage:")?;
                 for (i, cycle) in cycles.iter().enumerate() {
-                    writeln!(f, "  Cycle {}: {} → (back to start)", i + 1, cycle.join(" → "))?;
+                    writeln!(
+                        f,
+                        "  Cycle {}: {} → (back to start)",
+                        i + 1,
+                        cycle.join(" → ")
+                    )?;
                 }
                 Ok(())
             }
@@ -230,7 +231,10 @@ impl fmt::Display for SemanticError {
                      Use a role name instead (e.g., '{}.<column>').",
                     dimension,
                     available_roles.join(", "),
-                    available_roles.first().map(|s| s.as_str()).unwrap_or("role")
+                    available_roles
+                        .first()
+                        .map(|s| s.as_str())
+                        .unwrap_or("role")
                 )
             }
             SemanticError::QueryPlanError(msg) => {
@@ -242,17 +246,18 @@ impl fmt::Display for SemanticError {
 
 impl std::error::Error for SemanticError {}
 
-impl From<super::column_lineage::LineageCycleError> for SemanticError {
-    fn from(err: super::column_lineage::LineageCycleError) -> Self {
-        SemanticError::ColumnLineageCycle {
-            cycles: err
-                .cycles
-                .into_iter()
-                .map(|cycle| cycle.into_iter().map(|c| c.to_string()).collect())
-                .collect(),
-        }
-    }
-}
+// TODO: Re-enable when column_lineage module is implemented
+// impl From<super::column_lineage::LineageCycleError> for SemanticError {
+//     fn from(err: super::column_lineage::LineageCycleError) -> Self {
+//         SemanticError::ColumnLineageCycle {
+//             cycles: err
+//                 .cycles
+//                 .into_iter()
+//                 .map(|cycle| cycle.into_iter().map(|c| c.to_string()).collect())
+//                 .collect(),
+//         }
+//     }
+// }
 
 // Legacy type aliases for backward compatibility during migration
 // TODO: Remove these after full migration
