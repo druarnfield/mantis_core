@@ -22,8 +22,8 @@ use super::expr::Expr;
 use super::query::Query;
 use super::token::{Token, TokenStream};
 
-// Re-export DataType from model::types for convenience
-pub use crate::model::types::DataType;
+// Re-export DataType from sql::types for DDL generation
+pub use super::types::DataType;
 
 /// DDL statement types.
 #[derive(Debug, Clone)]

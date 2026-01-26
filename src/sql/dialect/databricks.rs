@@ -69,7 +69,7 @@ impl SqlDialect for Databricks {
         helpers::remap_function_databricks(name)
     }
 
-    fn emit_data_type(&self, dt: &crate::model::types::DataType) -> String {
+    fn emit_data_type(&self, dt: &super::super::types::DataType) -> String {
         helpers::emit_data_type_databricks(dt)
     }
 }

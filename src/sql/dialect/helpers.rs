@@ -230,91 +230,150 @@ pub fn remap_function_databricks(name: &str) -> Option<&'static str> {
 // Data Type Emission
 // =============================================================================
 
-use crate::model::types::DataType;
+use super::super::types::DataType;
 
 /// Emit data type for ANSI/Postgres style.
 /// Used by: Postgres, DuckDB, Snowflake, Redshift
 pub fn emit_data_type_ansi(dt: &DataType) -> String {
-    // TODO: Update when detailed SQL DataType is available
-    // Current DataType only has: String, Int, Decimal, Float, Bool, Date, Timestamp
     match dt {
         DataType::Bool => "BOOLEAN".into(),
-        DataType::Int => "BIGINT".into(),
-        DataType::Float => "DOUBLE PRECISION".into(),
-        DataType::Decimal => "DECIMAL(18, 2)".into(), // Default precision
+        DataType::Int8 => "TINYINT".into(),
+        DataType::Int16 => "SMALLINT".into(),
+        DataType::Int32 => "INTEGER".into(),
+        DataType::Int64 => "BIGINT".into(),
+        DataType::Float32 => "REAL".into(),
+        DataType::Float64 => "DOUBLE PRECISION".into(),
+        DataType::Decimal(p, s) => format!("DECIMAL({}, {})", p, s),
         DataType::String => "TEXT".into(),
+        DataType::Char(n) => format!("CHAR({})", n),
+        DataType::Varchar(n) => format!("VARCHAR({})", n),
         DataType::Date => "DATE".into(),
+        DataType::Time => "TIME".into(),
         DataType::Timestamp => "TIMESTAMP".into(),
+        DataType::TimestampTz => "TIMESTAMP WITH TIME ZONE".into(),
+        DataType::Binary => "BYTEA".into(),
+        DataType::Json => "JSON".into(),
+        DataType::Uuid => "UUID".into(),
     }
 }
 
 /// Emit data type for MySQL.
 pub fn emit_data_type_mysql(dt: &DataType) -> String {
-    // TODO: Update when detailed SQL DataType is available
     match dt {
         DataType::Bool => "TINYINT(1)".into(),
-        DataType::Int => "BIGINT".into(),
-        DataType::Float => "DOUBLE".into(),
-        DataType::Decimal => "DECIMAL(18, 2)".into(),
+        DataType::Int8 => "TINYINT".into(),
+        DataType::Int16 => "SMALLINT".into(),
+        DataType::Int32 => "INT".into(),
+        DataType::Int64 => "BIGINT".into(),
+        DataType::Float32 => "FLOAT".into(),
+        DataType::Float64 => "DOUBLE".into(),
+        DataType::Decimal(p, s) => format!("DECIMAL({}, {})", p, s),
         DataType::String => "TEXT".into(),
+        DataType::Char(n) => format!("CHAR({})", n),
+        DataType::Varchar(n) => format!("VARCHAR({})", n),
         DataType::Date => "DATE".into(),
+        DataType::Time => "TIME".into(),
         DataType::Timestamp => "DATETIME".into(),
+        DataType::TimestampTz => "DATETIME".into(), // MySQL doesn't have TZ-aware datetime
+        DataType::Binary => "BLOB".into(),
+        DataType::Json => "JSON".into(),
+        DataType::Uuid => "CHAR(36)".into(), // MySQL uses CHAR(36) for UUID
     }
 }
 
 /// Emit data type for T-SQL.
 pub fn emit_data_type_tsql(dt: &DataType) -> String {
-    // TODO: Update when detailed SQL DataType is available
     match dt {
         DataType::Bool => "BIT".into(),
-        DataType::Int => "BIGINT".into(),
-        DataType::Float => "FLOAT".into(),
-        DataType::Decimal => "DECIMAL(18, 2)".into(),
+        DataType::Int8 => "TINYINT".into(),
+        DataType::Int16 => "SMALLINT".into(),
+        DataType::Int32 => "INT".into(),
+        DataType::Int64 => "BIGINT".into(),
+        DataType::Float32 => "REAL".into(),
+        DataType::Float64 => "FLOAT".into(),
+        DataType::Decimal(p, s) => format!("DECIMAL({}, {})", p, s),
         DataType::String => "NVARCHAR(MAX)".into(),
+        DataType::Char(n) => format!("NCHAR({})", n),
+        DataType::Varchar(n) => format!("NVARCHAR({})", n),
         DataType::Date => "DATE".into(),
+        DataType::Time => "TIME".into(),
         DataType::Timestamp => "DATETIME2".into(),
+        DataType::TimestampTz => "DATETIMEOFFSET".into(),
+        DataType::Binary => "VARBINARY(MAX)".into(),
+        DataType::Json => "NVARCHAR(MAX)".into(), // T-SQL doesn't have native JSON type (pre-2022)
+        DataType::Uuid => "UNIQUEIDENTIFIER".into(),
     }
 }
 
 /// Emit data type for Snowflake.
 pub fn emit_data_type_snowflake(dt: &DataType) -> String {
-    // TODO: Update when detailed SQL DataType is available
     match dt {
         DataType::Bool => "BOOLEAN".into(),
-        DataType::Int => "BIGINT".into(),
-        DataType::Float => "DOUBLE".into(),
-        DataType::Decimal => "NUMBER(18, 2)".into(),
+        DataType::Int8 => "TINYINT".into(),
+        DataType::Int16 => "SMALLINT".into(),
+        DataType::Int32 => "INTEGER".into(),
+        DataType::Int64 => "BIGINT".into(),
+        DataType::Float32 => "FLOAT".into(),
+        DataType::Float64 => "DOUBLE".into(),
+        DataType::Decimal(p, s) => format!("NUMBER({}, {})", p, s),
         DataType::String => "VARCHAR".into(),
+        DataType::Char(n) => format!("CHAR({})", n),
+        DataType::Varchar(n) => format!("VARCHAR({})", n),
         DataType::Date => "DATE".into(),
+        DataType::Time => "TIME".into(),
         DataType::Timestamp => "TIMESTAMP_NTZ".into(),
+        DataType::TimestampTz => "TIMESTAMP_TZ".into(),
+        DataType::Binary => "BINARY".into(),
+        DataType::Json => "VARIANT".into(), // Snowflake uses VARIANT for semi-structured data
+        DataType::Uuid => "VARCHAR(36)".into(), // Snowflake doesn't have native UUID
     }
 }
 
 /// Emit data type for BigQuery.
 pub fn emit_data_type_bigquery(dt: &DataType) -> String {
-    // TODO: Update when detailed SQL DataType is available
     match dt {
         DataType::Bool => "BOOL".into(),
-        DataType::Int => "INT64".into(),
-        DataType::Float => "FLOAT64".into(),
-        DataType::Decimal => "NUMERIC(18, 2)".into(),
+        DataType::Int8 => "INT64".into(), // BigQuery only has INT64
+        DataType::Int16 => "INT64".into(),
+        DataType::Int32 => "INT64".into(),
+        DataType::Int64 => "INT64".into(),
+        DataType::Float32 => "FLOAT64".into(), // BigQuery only has FLOAT64
+        DataType::Float64 => "FLOAT64".into(),
+        DataType::Decimal(p, s) => format!("NUMERIC({}, {})", p, s),
         DataType::String => "STRING".into(),
+        DataType::Char(n) => format!("STRING({})", n),
+        DataType::Varchar(n) => format!("STRING({})", n),
         DataType::Date => "DATE".into(),
+        DataType::Time => "TIME".into(),
         DataType::Timestamp => "TIMESTAMP".into(),
+        DataType::TimestampTz => "TIMESTAMP".into(), // BigQuery TIMESTAMP is always UTC
+        DataType::Binary => "BYTES".into(),
+        DataType::Json => "JSON".into(),
+        DataType::Uuid => "STRING".into(), // BigQuery uses STRING for UUID
     }
 }
 
 /// Emit data type for Databricks (Spark SQL).
 pub fn emit_data_type_databricks(dt: &DataType) -> String {
-    // TODO: Update when detailed SQL DataType is available
     match dt {
         DataType::Bool => "BOOLEAN".into(),
-        DataType::Int => "BIGINT".into(),
-        DataType::Float => "DOUBLE".into(),
-        DataType::Decimal => "DECIMAL(18, 2)".into(),
+        DataType::Int8 => "TINYINT".into(),
+        DataType::Int16 => "SMALLINT".into(),
+        DataType::Int32 => "INT".into(),
+        DataType::Int64 => "BIGINT".into(),
+        DataType::Float32 => "FLOAT".into(),
+        DataType::Float64 => "DOUBLE".into(),
+        DataType::Decimal(p, s) => format!("DECIMAL({}, {})", p, s),
         DataType::String => "STRING".into(),
+        DataType::Char(n) => format!("CHAR({})", n),
+        DataType::Varchar(n) => format!("VARCHAR({})", n),
         DataType::Date => "DATE".into(),
+        DataType::Time => "STRING".into(), // Databricks doesn't have native TIME
         DataType::Timestamp => "TIMESTAMP".into(),
+        DataType::TimestampTz => "TIMESTAMP".into(), // Spark TIMESTAMP is always UTC
+        DataType::Binary => "BINARY".into(),
+        DataType::Json => "STRING".into(), // Use STRING for JSON in Spark
+        DataType::Uuid => "STRING".into(), // Use STRING for UUID in Spark
     }
 }
 
