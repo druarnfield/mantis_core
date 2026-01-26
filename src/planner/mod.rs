@@ -10,6 +10,8 @@ pub mod expr_converter;
 pub mod logical;
 pub mod physical;
 
+pub use expr_converter::{ExprConverter, QueryContext};
+
 use crate::model::Report;
 use crate::semantic::graph::UnifiedGraph;
 use crate::sql::query::Query;
