@@ -260,10 +260,7 @@ fn lower_table(table: ast::Table) -> Result<model::Table, LoweringError> {
             ast::SlicerKind::Calculated { data_type, expr } => model::table::Slicer::Calculated {
                 name: slicer_name.clone(),
                 data_type,
-                expr: model::table::SqlExpr {
-                    sql: expr.sql,
-                    span: expr.span,
-                },
+                expr: expr.clone(),
             },
         };
 
@@ -385,10 +382,7 @@ fn lower_report(report: ast::Report) -> Result<model::Report, LoweringError> {
             },
             ast::ShowItem::InlineMeasure { name, expr, label } => model::ShowItem::InlineMeasure {
                 name,
-                expr: model::table::SqlExpr {
-                    sql: expr.sql,
-                    span: expr.span,
-                },
+                expr: expr.clone(),
                 label,
             },
         };
@@ -398,10 +392,7 @@ fn lower_report(report: ast::Report) -> Result<model::Report, LoweringError> {
     // Convert filters
     let mut filters = Vec::new();
     if let Some(filter) = report.filter {
-        filters.push(model::table::SqlExpr {
-            sql: filter.value.sql,
-            span: filter.value.span,
-        });
+        filters.push(filter.value.clone());
     }
 
     // Convert sort
