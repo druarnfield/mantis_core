@@ -6,6 +6,7 @@
 //! 3. Cost Estimation: Vec<PhysicalPlan> → Query (pick best, emit SQL)
 
 pub mod cost;
+pub mod expr_converter;
 pub mod logical;
 pub mod physical;
 
