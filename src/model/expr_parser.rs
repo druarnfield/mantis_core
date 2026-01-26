@@ -117,6 +117,29 @@ fn convert_unary_op(op: &sql::UnaryOperator, span: Span) -> ParseResult<UnaryOp>
     }
 }
 
+/// Convert sqlparser data type to our DataType
+fn convert_data_type(sql_type: &sql::DataType, span: Span) -> ParseResult<DataType> {
+    match sql_type {
+        sql::DataType::Integer(_) | sql::DataType::Int(_) | sql::DataType::BigInt(_) => {
+            Ok(DataType::Int)
+        }
+        sql::DataType::Decimal(_) | sql::DataType::Float(_) | sql::DataType::Double => {
+            Ok(DataType::Float)
+        }
+        sql::DataType::String(_)
+        | sql::DataType::Varchar(_)
+        | sql::DataType::Char(_)
+        | sql::DataType::Text => Ok(DataType::String),
+        sql::DataType::Boolean => Ok(DataType::Bool),
+        sql::DataType::Date => Ok(DataType::Date),
+        sql::DataType::Timestamp(_, _) => Ok(DataType::Timestamp),
+        unsupported => Err(ParseError::InvalidDataType {
+            message: format!("Unsupported data type: {:?}", unsupported),
+            span,
+        }),
+    }
+}
+
 /// Convert sqlparser function to our Function expression
 fn convert_function(func: &sql::Function, span: Span) -> ParseResult<Expr> {
     let func_name = func.name.to_string().to_uppercase();
@@ -331,6 +354,14 @@ fn convert_expr(sql_expr: &sql::Expr, span: Span) -> ParseResult<Expr> {
                 else_clause,
             })
         }
+
+        // CAST expression
+        sql::Expr::Cast {
+            expr, data_type, ..
+        } => Ok(Expr::Cast {
+            expr: Box::new(convert_expr(expr, span.clone())?),
+            target_type: convert_data_type(data_type, span)?,
+        }),
 
         // For now, return error for other types - we'll implement them in next tasks
         unsupported => Err(ParseError::UnsupportedFeature {
@@ -727,6 +758,28 @@ mod tests {
                 assert!(else_clause.is_some());
             }
             _ => panic!("Expected Case expression"),
+        }
+    }
+
+    #[test]
+    fn test_convert_cast_expression() {
+        // CAST(@amount AS DECIMAL)
+        let inner = sql::Expr::Identifier(sql::Ident::new("__ATOM__amount"));
+        let data_type = sql::DataType::Decimal(sql::ExactNumberInfo::None);
+        let expr = sql::Expr::Cast {
+            kind: sql::CastKind::Cast,
+            expr: Box::new(inner),
+            data_type,
+            format: None,
+        };
+
+        let result = convert_expr(&expr, 0..25).unwrap();
+        match result {
+            Expr::Cast { expr, target_type } => {
+                assert_eq!(*expr, Expr::AtomRef("amount".to_string()));
+                assert_eq!(target_type, DataType::Float); // DECIMAL maps to Float
+            }
+            _ => panic!("Expected Cast expression"),
         }
     }
 }
