@@ -40,3 +40,34 @@ impl TableSet {
         self.tables.iter().cloned().collect()
     }
 }
+
+/// Generate all subsets of given size from a list of tables.
+pub fn generate_subsets(tables: &[String], size: usize) -> Vec<TableSet> {
+    if size == 0 || size > tables.len() {
+        return vec![];
+    }
+
+    let mut result = Vec::new();
+    let mut current = Vec::new();
+    generate_subsets_helper(tables, size, 0, &mut current, &mut result);
+    result
+}
+
+fn generate_subsets_helper(
+    tables: &[String],
+    size: usize,
+    start: usize,
+    current: &mut Vec<String>,
+    result: &mut Vec<TableSet>,
+) {
+    if current.len() == size {
+        result.push(TableSet::from_vec(current.clone()));
+        return;
+    }
+
+    for i in start..tables.len() {
+        current.push(tables[i].clone());
+        generate_subsets_helper(tables, size, i + 1, current, result);
+        current.pop();
+    }
+}

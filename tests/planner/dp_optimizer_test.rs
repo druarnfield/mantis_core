@@ -31,3 +31,36 @@ fn test_table_set_single() {
     assert_eq!(table_set.size(), 1);
     assert!(table_set.contains("orders"));
 }
+
+#[test]
+fn test_generate_subsets_size_1() {
+    let tables = vec!["A".to_string(), "B".to_string(), "C".to_string()];
+
+    let subsets = generate_subsets(&tables, 1);
+
+    assert_eq!(subsets.len(), 3); // {A}, {B}, {C}
+    assert!(subsets.iter().any(|s| s.size() == 1 && s.contains("A")));
+    assert!(subsets.iter().any(|s| s.size() == 1 && s.contains("B")));
+    assert!(subsets.iter().any(|s| s.size() == 1 && s.contains("C")));
+}
+
+#[test]
+fn test_generate_subsets_size_2() {
+    let tables = vec!["A".to_string(), "B".to_string(), "C".to_string()];
+
+    let subsets = generate_subsets(&tables, 2);
+
+    assert_eq!(subsets.len(), 3); // {A,B}, {A,C}, {B,C}
+    assert!(subsets.iter().any(|s| s.contains("A") && s.contains("B")));
+    assert!(subsets.iter().any(|s| s.contains("A") && s.contains("C")));
+    assert!(subsets.iter().any(|s| s.contains("B") && s.contains("C")));
+}
+
+#[test]
+fn test_generate_subsets_all() {
+    let tables = vec!["A".to_string(), "B".to_string()];
+
+    let subsets = generate_subsets(&tables, 2);
+
+    assert_eq!(subsets.len(), 1); // {A,B}
+}
