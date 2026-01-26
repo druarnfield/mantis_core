@@ -62,6 +62,79 @@ fn preprocess_sql_for_parsing(sql: &str) -> String {
     ATOM_PATTERN.replace_all(sql, "__ATOM__$1").to_string()
 }
 
+/// Parse a SQL expression string into our Expr AST.
+///
+/// This is the main entry point for parsing SQL expressions.
+///
+/// # Process
+/// 1. Preprocess: @atom → __ATOM__atom
+/// 2. Parse with sqlparser (validates SQL syntax)
+/// 3. Convert sqlparser AST → our Expr AST
+///
+/// # Arguments
+/// * `sql` - The SQL expression string (may contain @atom references)
+/// * `span` - Source location for error reporting
+pub fn parse_sql_expr(sql: &str, span: Span) -> ParseResult<Expr> {
+    // Step 1: Preprocess @atoms
+    let preprocessed = preprocess_sql_for_parsing(sql);
+
+    // Step 2: Parse with sqlparser
+    let dialect = GenericDialect {};
+    let wrapped = format!("SELECT {}", preprocessed);
+
+    let statements =
+        Parser::parse_sql(&dialect, &wrapped).map_err(|e| ParseError::SqlParseError {
+            message: e.to_string(),
+            span: span.clone(),
+        })?;
+
+    if statements.len() != 1 {
+        return Err(ParseError::SqlParseError {
+            message: "Expected single SQL statement".to_string(),
+            span,
+        });
+    }
+
+    // Step 3: Extract expression from SELECT
+    let sql_expr = match &statements[0] {
+        sql::Statement::Query(query) => match query.body.as_ref() {
+            sql::SetExpr::Select(select) => {
+                if select.projection.len() != 1 {
+                    return Err(ParseError::SqlParseError {
+                        message: "Expected single expression".to_string(),
+                        span,
+                    });
+                }
+                match &select.projection[0] {
+                    sql::SelectItem::UnnamedExpr(expr) => expr,
+                    sql::SelectItem::ExprWithAlias { expr, .. } => expr,
+                    _ => {
+                        return Err(ParseError::SqlParseError {
+                            message: "Unexpected projection type".to_string(),
+                            span,
+                        })
+                    }
+                }
+            }
+            _ => {
+                return Err(ParseError::SqlParseError {
+                    message: "Expected SELECT expression".to_string(),
+                    span,
+                })
+            }
+        },
+        _ => {
+            return Err(ParseError::SqlParseError {
+                message: "Expected SELECT statement".to_string(),
+                span,
+            })
+        }
+    };
+
+    // Step 4: Convert to our AST
+    convert_expr(sql_expr, span)
+}
+
 // Helper functions will be added in subsequent tasks
 
 /// Convert sqlparser binary operator to our BinaryOp type
@@ -780,6 +853,53 @@ mod tests {
                 assert_eq!(target_type, DataType::Float); // DECIMAL maps to Float
             }
             _ => panic!("Expected Cast expression"),
+        }
+    }
+
+    #[test]
+    fn test_parse_sql_expr_simple_atom() {
+        let result = parse_sql_expr("@revenue", 0..8).unwrap();
+        assert_eq!(result, Expr::AtomRef("revenue".to_string()));
+    }
+
+    #[test]
+    fn test_parse_sql_expr_aggregate() {
+        let result = parse_sql_expr("SUM(@revenue)", 0..13).unwrap();
+
+        match result {
+            Expr::Function {
+                func: Func::Aggregate(AggregateFunc::Sum),
+                args,
+            } => {
+                assert_eq!(args.len(), 1);
+                assert_eq!(args[0], Expr::AtomRef("revenue".to_string()));
+            }
+            _ => panic!("Expected SUM function"),
+        }
+    }
+
+    #[test]
+    fn test_parse_sql_expr_complex() {
+        let sql = "SUM(@revenue * @quantity) / NULLIF(COUNT(*), 0)";
+        let result = parse_sql_expr(sql, 0..48).unwrap();
+
+        // Just verify it parses successfully - detailed structure tested elsewhere
+        match result {
+            Expr::BinaryOp {
+                op: BinaryOp::Div, ..
+            } => {}
+            _ => panic!("Expected division expression"),
+        }
+    }
+
+    #[test]
+    fn test_parse_sql_expr_syntax_error() {
+        let result = parse_sql_expr("SUM(@revenue", 0..12);
+
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            ParseError::SqlParseError { .. } => {}
+            _ => panic!("Expected SqlParseError"),
         }
     }
 }
