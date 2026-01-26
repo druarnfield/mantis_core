@@ -64,3 +64,31 @@ fn test_generate_subsets_all() {
 
     assert_eq!(subsets.len(), 1); // {A,B}
 }
+
+#[test]
+fn test_enumerate_splits_two_tables() {
+    let subset = TableSet::from_vec(vec!["A".to_string(), "B".to_string()]);
+
+    let splits = enumerate_splits(&subset);
+
+    // Should have 1 split: ({A}, {B})
+    // We deduplicate to avoid ({A}, {B}) and ({B}, {A})
+    assert_eq!(splits.len(), 1);
+
+    let (s1, s2) = &splits[0];
+    assert_eq!(s1.size(), 1);
+    assert_eq!(s2.size(), 1);
+}
+
+#[test]
+fn test_enumerate_splits_three_tables() {
+    let subset = TableSet::from_vec(vec!["A".to_string(), "B".to_string(), "C".to_string()]);
+
+    let splits = enumerate_splits(&subset);
+
+    // For {A,B,C}, we have:
+    // Size 1: ({A}, {B,C}), ({B}, {A,C}), ({C}, {A,B})
+    // We don't need size 2 because we'd get duplicates
+    // Total: 3 unique splits
+    assert_eq!(splits.len(), 3);
+}

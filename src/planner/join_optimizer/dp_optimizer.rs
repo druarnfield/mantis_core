@@ -71,3 +71,45 @@ fn generate_subsets_helper(
         current.pop();
     }
 }
+
+/// Enumerate all ways to split a table set into two non-empty subsets.
+/// Returns pairs (S1, S2) where S1 ∪ S2 = subset.
+pub fn enumerate_splits(subset: &TableSet) -> Vec<(TableSet, TableSet)> {
+    let tables: Vec<_> = subset.iter().cloned().collect();
+    let n = tables.len();
+
+    if n < 2 {
+        return vec![];
+    }
+
+    let mut splits = Vec::new();
+
+    // Try all non-empty, non-full subsets as S1
+    // Only iterate up to (n-1) to avoid the full set
+    for size in 1..n {
+        for s1_subset in generate_subsets(&tables, size) {
+            // S2 is the complement of S1
+            let s2_tables: Vec<_> = tables
+                .iter()
+                .filter(|t| !s1_subset.contains(t))
+                .cloned()
+                .collect();
+            let s2_subset = TableSet::from_vec(s2_tables);
+
+            // Only add if s1 is smaller, or if equal size, s1 is lexicographically smaller
+            // This avoids duplicates like (A,B) and (B,A)
+            if s1_subset.size() < s2_subset.size() {
+                splits.push((s1_subset, s2_subset));
+            } else if s1_subset.size() == s2_subset.size() {
+                // Compare lexicographically
+                let s1_vec = s1_subset.to_vec();
+                let s2_vec = s2_subset.to_vec();
+                if s1_vec < s2_vec {
+                    splits.push((s1_subset, s2_subset));
+                }
+            }
+        }
+    }
+
+    splits
+}
