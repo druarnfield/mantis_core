@@ -26,6 +26,8 @@ use super::expr::*;
 #[allow(unused_imports)]
 use super::types::DataType;
 
+use super::expr_validation::ExprContext;
+
 /// Regex pattern for matching @atom references
 static ATOM_PATTERN: Lazy<Regex> = Lazy::new(|| Regex::new(r"@(\w+)").unwrap());
 
@@ -70,11 +72,13 @@ fn preprocess_sql_for_parsing(sql: &str) -> String {
 /// 1. Preprocess: @atom → __ATOM__atom
 /// 2. Parse with sqlparser (validates SQL syntax)
 /// 3. Convert sqlparser AST → our Expr AST
+/// 4. Validate expression context (aggregates allowed, etc.)
 ///
 /// # Arguments
 /// * `sql` - The SQL expression string (may contain @atom references)
 /// * `span` - Source location for error reporting
-pub fn parse_sql_expr(sql: &str, span: Span) -> ParseResult<Expr> {
+/// * `context` - Where this expression is used (Measure/Filter/CalculatedSlicer)
+pub fn parse_sql_expr(sql: &str, span: Span, context: ExprContext) -> ParseResult<Expr> {
     // Step 1: Preprocess @atoms
     let preprocessed = preprocess_sql_for_parsing(sql);
 
@@ -132,7 +136,16 @@ pub fn parse_sql_expr(sql: &str, span: Span) -> ParseResult<Expr> {
     };
 
     // Step 4: Convert to our AST
-    convert_expr(sql_expr, span)
+    let expr = convert_expr(sql_expr, span.clone())?;
+
+    // Step 5: Validate context
+    expr.validate_context(context)
+        .map_err(|e| ParseError::SqlParseError {
+            message: e.to_string(),
+            span,
+        })?;
+
+    Ok(expr)
 }
 
 // Helper functions will be added in subsequent tasks
@@ -151,17 +164,13 @@ fn convert_binary_op(op: &sql::BinaryOperator, span: Span) -> ParseResult<Binary
         sql::BinaryOperator::Eq => Ok(BinaryOp::Eq),
         sql::BinaryOperator::NotEq => Ok(BinaryOp::Ne),
         sql::BinaryOperator::Lt => Ok(BinaryOp::Lt),
-        sql::BinaryOperator::LtEq => Ok(BinaryOp::Le),
+        sql::BinaryOperator::LtEq => Ok(BinaryOp::Lte),
         sql::BinaryOperator::Gt => Ok(BinaryOp::Gt),
-        sql::BinaryOperator::GtEq => Ok(BinaryOp::Ge),
+        sql::BinaryOperator::GtEq => Ok(BinaryOp::Gte),
 
         // Logical
         sql::BinaryOperator::And => Ok(BinaryOp::And),
         sql::BinaryOperator::Or => Ok(BinaryOp::Or),
-
-        // String
-        sql::BinaryOperator::Like => Ok(BinaryOp::Like),
-        sql::BinaryOperator::NotLike => Ok(BinaryOp::NotLike),
 
         unsupported => Err(ParseError::UnsupportedFeature {
             feature: format!("Binary operator: {:?}", unsupported),
@@ -388,12 +397,13 @@ fn convert_expr(sql_expr: &sql::Expr, span: Span) -> ParseResult<Expr> {
             results,
             else_result,
         } => {
-            // Convert operand if present (simple CASE form)
-            let operand_expr = operand
-                .as_ref()
-                .map(|e| convert_expr(e, span.clone()))
-                .transpose()?
-                .map(Box::new);
+            // Note: We don't support operand (simple CASE form) yet
+            if operand.is_some() {
+                return Err(ParseError::UnsupportedFeature {
+                    feature: "Simple CASE expressions with operand not supported".to_string(),
+                    span,
+                });
+            }
 
             // Convert WHEN clauses
             if conditions.len() != results.len() {
@@ -403,28 +413,27 @@ fn convert_expr(sql_expr: &sql::Expr, span: Span) -> ParseResult<Expr> {
                 });
             }
 
-            let when_clauses = conditions
+            let condition_pairs = conditions
                 .iter()
                 .zip(results.iter())
                 .map(|(cond, res)| {
-                    Ok(WhenClause {
-                        condition: convert_expr(cond, span.clone())?,
-                        result: convert_expr(res, span.clone())?,
-                    })
+                    Ok((
+                        convert_expr(cond, span.clone())?,
+                        convert_expr(res, span.clone())?,
+                    ))
                 })
                 .collect::<Result<Vec<_>, _>>()?;
 
             // Convert ELSE clause if present
-            let else_clause = else_result
+            let else_expr = else_result
                 .as_ref()
                 .map(|e| convert_expr(e, span.clone()))
                 .transpose()?
                 .map(Box::new);
 
             Ok(Expr::Case {
-                operand: operand_expr,
-                when_clauses,
-                else_clause,
+                conditions: condition_pairs,
+                else_expr,
             })
         }
 
@@ -433,7 +442,7 @@ fn convert_expr(sql_expr: &sql::Expr, span: Span) -> ParseResult<Expr> {
             expr, data_type, ..
         } => Ok(Expr::Cast {
             expr: Box::new(convert_expr(expr, span.clone())?),
-            target_type: convert_data_type(data_type, span)?,
+            data_type: convert_data_type(data_type, span)?,
         }),
 
         // For now, return error for other types - we'll implement them in next tasks
@@ -822,13 +831,11 @@ mod tests {
         let result = convert_expr(&expr, 0..54).unwrap();
         match result {
             Expr::Case {
-                operand,
-                when_clauses,
-                else_clause,
+                conditions,
+                else_expr,
             } => {
-                assert!(operand.is_none());
-                assert_eq!(when_clauses.len(), 1);
-                assert!(else_clause.is_some());
+                assert_eq!(conditions.len(), 1);
+                assert!(else_expr.is_some());
             }
             _ => panic!("Expected Case expression"),
         }
@@ -848,9 +855,9 @@ mod tests {
 
         let result = convert_expr(&expr, 0..25).unwrap();
         match result {
-            Expr::Cast { expr, target_type } => {
+            Expr::Cast { expr, data_type } => {
                 assert_eq!(*expr, Expr::AtomRef("amount".to_string()));
-                assert_eq!(target_type, DataType::Float); // DECIMAL maps to Float
+                assert_eq!(data_type, DataType::Float); // DECIMAL maps to Float
             }
             _ => panic!("Expected Cast expression"),
         }
@@ -858,13 +865,13 @@ mod tests {
 
     #[test]
     fn test_parse_sql_expr_simple_atom() {
-        let result = parse_sql_expr("@revenue", 0..8).unwrap();
+        let result = parse_sql_expr("@revenue", 0..8, ExprContext::Measure).unwrap();
         assert_eq!(result, Expr::AtomRef("revenue".to_string()));
     }
 
     #[test]
     fn test_parse_sql_expr_aggregate() {
-        let result = parse_sql_expr("SUM(@revenue)", 0..13).unwrap();
+        let result = parse_sql_expr("SUM(@revenue)", 0..13, ExprContext::Measure).unwrap();
 
         match result {
             Expr::Function {
@@ -881,7 +888,7 @@ mod tests {
     #[test]
     fn test_parse_sql_expr_complex() {
         let sql = "SUM(@revenue * @quantity) / NULLIF(COUNT(*), 0)";
-        let result = parse_sql_expr(sql, 0..48).unwrap();
+        let result = parse_sql_expr(sql, 0..48, ExprContext::Measure).unwrap();
 
         // Just verify it parses successfully - detailed structure tested elsewhere
         match result {
@@ -894,12 +901,31 @@ mod tests {
 
     #[test]
     fn test_parse_sql_expr_syntax_error() {
-        let result = parse_sql_expr("SUM(@revenue", 0..12);
+        let result = parse_sql_expr("SUM(@revenue", 0..12, ExprContext::Measure);
 
         assert!(result.is_err());
         match result.unwrap_err() {
             ParseError::SqlParseError { .. } => {}
             _ => panic!("Expected SqlParseError"),
         }
+    }
+
+    #[test]
+    fn test_parse_sql_expr_context_validation_filter_rejects_aggregate() {
+        let result = parse_sql_expr("SUM(@revenue)", 0..13, ExprContext::Filter);
+
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            ParseError::SqlParseError { message, .. } => {
+                assert!(message.contains("Aggregate functions not allowed"));
+            }
+            _ => panic!("Expected SqlParseError with validation message"),
+        }
+    }
+
+    #[test]
+    fn test_parse_sql_expr_context_validation_filter_allows_scalar() {
+        let result = parse_sql_expr("UPPER(name)", 0..11, ExprContext::Filter);
+        assert!(result.is_ok());
     }
 }
