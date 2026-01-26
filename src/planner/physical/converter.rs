@@ -18,11 +18,15 @@ fn format_projection_item(item: &crate::planner::logical::ProjectionItem) -> Str
 
 pub struct PhysicalConverter<'a> {
     graph: &'a UnifiedGraph,
+    config: &'a crate::planner::physical::PhysicalPlannerConfig,
 }
 
 impl<'a> PhysicalConverter<'a> {
-    pub fn new(graph: &'a UnifiedGraph) -> Self {
-        Self { graph }
+    pub fn new(
+        graph: &'a UnifiedGraph,
+        config: &'a crate::planner::physical::PhysicalPlannerConfig,
+    ) -> Self {
+        Self { graph, config }
     }
 
     pub fn convert(&self, logical: &LogicalPlan) -> PlanResult<Vec<PhysicalPlan>> {
@@ -127,28 +131,60 @@ impl<'a> PhysicalConverter<'a> {
 
     /// Convert a multi-table join using the join order optimizer.
     ///
-    /// For 2-3 tables: enumerate all join orders
-    /// For 4+ tables: use greedy algorithm
+    /// Strategy selection:
+    /// - DP: Use dynamic programming optimizer (for ≤10 tables)
+    /// - Legacy: Use enumeration (≤3 tables) or greedy (>3 tables)
+    /// - Adaptive: Choose based on table count
     fn convert_multi_table_join(
         &self,
         join_plan: &LogicalPlan,
         table_count: usize,
     ) -> PlanResult<Vec<PhysicalPlan>> {
-        let optimizer = JoinOrderOptimizer::new(self.graph);
+        use crate::planner::physical::join_optimizer::OptimizerStrategy;
 
-        // Get optimized join orders
-        let logical_candidates = if table_count <= 3 {
-            // Small joins: enumerate all permutations
-            optimizer.enumerate_join_orders(join_plan)
-        } else {
-            // Large joins: use greedy algorithm
-            let tables = optimizer.extract_tables(join_plan);
-            let table_refs: Vec<&str> = tables.iter().map(|s| s.as_str()).collect();
+        let optimizer =
+            JoinOrderOptimizer::with_strategy(self.graph, self.config.optimizer_strategy.clone());
 
-            if let Some(greedy_plan) = optimizer.greedy_join_order(&table_refs) {
-                vec![Some(greedy_plan)]
-            } else {
-                vec![]
+        // Extract tables for strategy selection
+        let tables = optimizer.extract_tables(join_plan);
+        let table_vec: Vec<String> = tables.into_iter().collect();
+
+        // Select strategy based on config
+        let strategy = optimizer.select_strategy(&table_vec);
+
+        // Get optimized join orders based on selected strategy
+        let logical_candidates = match strategy {
+            OptimizerStrategy::DP => {
+                // Use DP optimizer
+                use crate::planner::join_optimizer::dp_optimizer::DPOptimizer;
+
+                let mut dp = DPOptimizer::new(self.graph);
+
+                // Extract filters from the plan (if any)
+                let filters = self.extract_filters_from_plan(join_plan);
+
+                // Run DP optimization
+                if let Some(optimized) = dp.optimize(table_vec, filters) {
+                    vec![Some(optimized)]
+                } else {
+                    vec![]
+                }
+            }
+            OptimizerStrategy::Legacy | OptimizerStrategy::Adaptive => {
+                // Use legacy approach
+                if table_count <= 3 {
+                    // Small joins: enumerate all permutations
+                    optimizer.enumerate_join_orders(join_plan)
+                } else {
+                    // Large joins: use greedy algorithm
+                    let table_refs: Vec<&str> = table_vec.iter().map(|s| s.as_str()).collect();
+
+                    if let Some(greedy_plan) = optimizer.greedy_join_order(&table_refs) {
+                        vec![Some(greedy_plan)]
+                    } else {
+                        vec![]
+                    }
+                }
             }
         };
 
@@ -170,6 +206,28 @@ impl<'a> PhysicalConverter<'a> {
         }
 
         Ok(all_physical_plans)
+    }
+
+    /// Extract filters from a logical plan for DP optimizer.
+    fn extract_filters_from_plan(&self, plan: &LogicalPlan) -> Vec<crate::model::expr::Expr> {
+        let mut filters = Vec::new();
+        self.collect_filters(plan, &mut filters);
+        filters
+    }
+
+    /// Recursively collect filters from a logical plan.
+    fn collect_filters(&self, plan: &LogicalPlan, filters: &mut Vec<crate::model::expr::Expr>) {
+        match plan {
+            LogicalPlan::Filter(filter_node) => {
+                filters.extend(filter_node.predicates.clone());
+                self.collect_filters(&filter_node.input, filters);
+            }
+            LogicalPlan::Join(join) => {
+                self.collect_filters(&join.left, filters);
+                self.collect_filters(&join.right, filters);
+            }
+            _ => {}
+        }
     }
 
     /// Convert an optimized logical plan to physical plans.
@@ -380,7 +438,8 @@ mod tests {
     #[test]
     fn test_convert_filter_with_multiple_predicates_combines_with_and() {
         let graph = create_test_graph();
-        let converter = PhysicalConverter::new(&graph);
+        let config = crate::planner::physical::PhysicalPlannerConfig::default();
+        let converter = PhysicalConverter::new(&graph, &config);
 
         // Create a filter with multiple predicates
         let predicate1 = ModelExpr::BinaryOp {
@@ -441,7 +500,8 @@ mod tests {
     #[test]
     fn test_convert_filter_with_single_predicate_succeeds() {
         let graph = create_test_graph();
-        let converter = PhysicalConverter::new(&graph);
+        let config = crate::planner::physical::PhysicalPlannerConfig::default();
+        let converter = PhysicalConverter::new(&graph, &config);
 
         let predicate = ModelExpr::BinaryOp {
             left: Box::new(ModelExpr::Column {
