@@ -11,7 +11,7 @@ use super::{
     signals::{
         aggregator::SignalWeights,
         conventions::ConventionScope,
-        pipeline::{PipelineConfig, SignalPipeline, ScoredCandidate},
+        pipeline::{PipelineConfig, ScoredCandidate, SignalPipeline},
     },
     thresholds, Cardinality, InferredRelationship, RelationshipKey,
 };
@@ -27,6 +27,32 @@ pub struct TableInfo {
     pub columns: Vec<ColumnInfo>,
     /// Primary key column names
     pub primary_key: Vec<String>,
+}
+
+impl From<&crate::worker::protocol::GetTableResponse> for TableInfo {
+    fn from(resp: &crate::worker::protocol::GetTableResponse) -> Self {
+        Self {
+            schema: resp.table.schema.clone(),
+            name: resp.table.name.clone(),
+            columns: resp
+                .table
+                .columns
+                .iter()
+                .map(|c| ColumnInfo {
+                    name: c.name.clone(),
+                    data_type: c.data_type.clone(),
+                    is_nullable: c.is_nullable,
+                    is_unique: None,
+                })
+                .collect(),
+            primary_key: resp
+                .table
+                .primary_key
+                .as_ref()
+                .map(|pk| pk.columns.clone())
+                .unwrap_or_default(),
+        }
+    }
 }
 
 /// Pre-computed lookup structures for table metadata.
@@ -54,7 +80,9 @@ impl TableLookup {
             lookup.names.insert(name_lower.clone());
 
             // Add primary key columns
-            lookup.pk_columns.insert(name_lower.clone(), table.primary_key.clone());
+            lookup
+                .pk_columns
+                .insert(name_lower.clone(), table.primary_key.clone());
 
             // Add column info
             let cols: Vec<_> = table
@@ -529,8 +557,8 @@ impl InferenceEngine {
             0.0
         };
 
-        relationship.confidence =
-            (relationship.confidence + overlap_boost).clamp(0.0, thresholds::confidence::DB_CONSTRAINT);
+        relationship.confidence = (relationship.confidence + overlap_boost)
+            .clamp(0.0, thresholds::confidence::DB_CONSTRAINT);
 
         // Update cardinality using the shared method
         // Note: ManyToMany is a special case when both sides are not unique and we have stats
@@ -567,7 +595,9 @@ impl InferenceEngine {
         let stats_signals = StatisticsSignals::from_stats(from_stats, to_stats, overlap);
 
         // Check if this appears to be a valid FK relationship
-        if !stats_signals.is_valid_fk && overlap.overlap_percentage < thresholds::overlap::LOW * 100.0 {
+        if !stats_signals.is_valid_fk
+            && overlap.overlap_percentage < thresholds::overlap::LOW * 100.0
+        {
             // Very low overlap and not a valid superset - reject
             relationship.confidence = (relationship.confidence - 0.3).max(0.0);
             return false;
@@ -594,8 +624,8 @@ impl InferenceEngine {
         confidence_delta -= stats_signals.null_rate_penalty;
 
         // Update confidence
-        relationship.confidence =
-            (relationship.confidence + confidence_delta).clamp(0.0, thresholds::confidence::DB_CONSTRAINT);
+        relationship.confidence = (relationship.confidence + confidence_delta)
+            .clamp(0.0, thresholds::confidence::DB_CONSTRAINT);
 
         // Update cardinality from statistics if known
         if let Some(cardinality) = stats_signals.cardinality_hint {
@@ -771,7 +801,11 @@ mod tests {
         let relationships = engine.infer_relationships(orders, &tables);
 
         // Should find customer_id -> customers.id and product_id -> products.id
-        assert!(relationships.len() >= 2, "Found {} relationships", relationships.len());
+        assert!(
+            relationships.len() >= 2,
+            "Found {} relationships",
+            relationships.len()
+        );
 
         let customer_rel = relationships
             .iter()
@@ -848,8 +882,7 @@ mod tests {
         };
 
         engine.update_with_cardinality(
-            &mut rel,
-            98.0,  // 98% overlap
+            &mut rel, 98.0,  // 98% overlap
             false, // from is not unique (FK side)
             true,  // to is unique (PK side)
         );
@@ -1097,8 +1130,8 @@ mod tests {
     #[test]
     fn test_excluded_patterns_config() {
         // Create config with excluded keyword "customer"
-        let config = InferenceConfig::default()
-            .with_excluded_keywords(vec!["customer".to_string()]);
+        let config =
+            InferenceConfig::default().with_excluded_keywords(vec!["customer".to_string()]);
 
         let mut engine = InferenceEngine::with_config(config);
         let tables = make_test_tables();

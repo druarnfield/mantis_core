@@ -66,3 +66,9 @@ pub use crate::worker::protocol::ValueOverlapResponse as ValueOverlap;
 pub struct SchemaInfo {
     pub name: String,
 }
+
+impl From<crate::worker::protocol::SchemaInfo> for SchemaInfo {
+    fn from(info: crate::worker::protocol::SchemaInfo) -> Self {
+        Self { name: info.name }
+    }
+}

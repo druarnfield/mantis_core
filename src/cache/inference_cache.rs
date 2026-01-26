@@ -1,6 +1,7 @@
 //! Inference result caching with TTL and failure-based invalidation.
 
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::{CacheError, CacheResult, MetadataCache};
@@ -69,12 +70,12 @@ impl CachedInference {
 
 /// Inference result cache with TTL and failure-based invalidation.
 pub struct InferenceCache {
-    storage: MetadataCache,
+    storage: Arc<MetadataCache>,
 }
 
 impl InferenceCache {
     /// Create a new inference cache.
-    pub fn new(storage: MetadataCache) -> Self {
+    pub fn new(storage: Arc<MetadataCache>) -> Self {
         Self { storage }
     }
 

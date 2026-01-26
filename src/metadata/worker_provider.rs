@@ -9,7 +9,7 @@ use async_trait::async_trait;
 
 use super::provider::{MetadataProvider, MetadataResult};
 use super::{ColumnStats, ForeignKeyInfo, SchemaInfo, TableInfo, TableMetadata, ValueOverlap};
-use crate::worker::protocol::{self, methods, ConnectionParams};
+use crate::worker::protocol::{self, methods, ConnectionParams, DatabaseInfo};
 use crate::worker::WorkerClient;
 
 /// MetadataProvider implementation that uses the WorkerClient.
@@ -139,7 +139,7 @@ impl MetadataProvider for WorkerMetadataProvider {
             )
             .await?;
 
-        Ok(response.table.into())
+        Ok(response)
     }
 
     async fn get_foreign_keys(

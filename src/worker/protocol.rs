@@ -527,6 +527,18 @@ pub struct ValueOverlapResponse {
     pub right_is_unique: bool,
 }
 
+impl ValueOverlapResponse {
+    /// Determine if the overlap suggests a valid foreign key relationship.
+    ///
+    /// A valid FK suggestion requires:
+    /// - High overlap (>= 90%)
+    /// - Right is a superset (all left values exist in right)
+    /// - Right is unique (can be referenced)
+    pub fn suggests_foreign_key(&self) -> bool {
+        self.overlap_percentage >= 90.0 && self.right_is_superset && self.right_is_unique
+    }
+}
+
 // ============================================================================
 // Query Execution Response Types
 // ============================================================================

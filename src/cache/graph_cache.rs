@@ -137,7 +137,7 @@ impl Default for GraphCacheConfig {
 
 /// Graph cache service with two-tier caching (inference + graph).
 pub struct GraphCache {
-    storage: MetadataCache,
+    storage: Arc<MetadataCache>,
     inference_cache: Arc<InferenceCache>,
     config: GraphCacheConfig,
 }
@@ -145,6 +145,7 @@ pub struct GraphCache {
 impl GraphCache {
     /// Create a new graph cache.
     pub fn new(storage: MetadataCache, config: GraphCacheConfig) -> Self {
+        let storage = Arc::new(storage);
         let inference_cache = Arc::new(InferenceCache::new(storage.clone()));
         Self {
             storage,

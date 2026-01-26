@@ -53,11 +53,11 @@ impl ConstraintCollector {
     /// Load constraints from table metadata.
     pub fn load_from_metadata(&mut self, tables: &[TableMetadata]) {
         for table in tables {
-            let schema = table.schema.to_lowercase();
-            let table_name = table.name.to_lowercase();
+            let schema = table.table.schema.to_lowercase();
+            let table_name = table.table.name.to_lowercase();
 
             // Load primary key columns
-            if let Some(pk) = &table.primary_key {
+            if let Some(pk) = &table.table.primary_key {
                 for col in &pk.columns {
                     let key = (schema.clone(), table_name.clone(), col.to_lowercase());
                     self.pk_columns.insert(key.clone());
@@ -66,7 +66,7 @@ impl ConstraintCollector {
             }
 
             // Load unique constraints
-            for uc in &table.unique_constraints {
+            for uc in &table.table.unique_constraints {
                 // Only single-column unique constraints for now
                 if uc.columns.len() == 1 {
                     let key = (
@@ -79,7 +79,7 @@ impl ConstraintCollector {
             }
 
             // Load foreign keys
-            for fk in &table.foreign_keys {
+            for fk in &table.table.foreign_keys {
                 // Handle multi-column FKs by storing each column pair
                 for (i, from_col) in fk.columns.iter().enumerate() {
                     if i < fk.referenced_columns.len() {
@@ -95,11 +95,7 @@ impl ConstraintCollector {
                             constraint_name: fk.name.clone(),
                         };
 
-                        let key = (
-                            schema.clone(),
-                            table_name.clone(),
-                            from_col.to_lowercase(),
-                        );
+                        let key = (schema.clone(), table_name.clone(), from_col.to_lowercase());
                         self.foreign_keys.insert(key, stored);
 
                         // Also track target for reverse lookup

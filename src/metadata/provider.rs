@@ -10,6 +10,7 @@ use super::{ColumnStats, ForeignKeyInfo, SchemaInfo, TableInfo, TableMetadata, V
 use crate::semantic::inference::{
     InferenceConfig, InferenceEngine, InferredRelationship, TableInfo as InferenceTableInfo,
 };
+use crate::worker::protocol::DatabaseInfo;
 use crate::worker::WorkerError;
 
 /// Result type for metadata operations.
@@ -61,7 +62,11 @@ pub trait MetadataProvider: Send + Sync {
     async fn get_table(&self, schema: &str, table: &str) -> MetadataResult<TableMetadata>;
 
     /// Get foreign keys for a table.
-    async fn get_foreign_keys(&self, schema: &str, table: &str) -> MetadataResult<Vec<ForeignKeyInfo>>;
+    async fn get_foreign_keys(
+        &self,
+        schema: &str,
+        table: &str,
+    ) -> MetadataResult<Vec<ForeignKeyInfo>>;
 
     /// Get column statistics for cardinality analysis.
     async fn get_column_stats(
@@ -115,10 +120,7 @@ pub trait MetadataProvider: Send + Sync {
     async fn list_all_tables(&self) -> MetadataResult<Vec<TableInfo>> {
         let schemas = self.list_schemas().await?;
 
-        let futures: Vec<_> = schemas
-            .iter()
-            .map(|s| self.list_tables(&s.name))
-            .collect();
+        let futures: Vec<_> = schemas.iter().map(|s| self.list_tables(&s.name)).collect();
 
         let results = futures::future::join_all(futures).await;
 
@@ -152,10 +154,7 @@ pub trait MetadataProvider: Send + Sync {
         tables: &[TableMetadata],
         config: InferenceConfig,
     ) -> Vec<InferredRelationship> {
-        let table_infos: Vec<InferenceTableInfo> = tables
-            .iter()
-            .map(|t| t.into())
-            .collect();
+        let table_infos: Vec<InferenceTableInfo> = tables.iter().map(|t| t.into()).collect();
 
         let mut engine = InferenceEngine::with_config(config);
 
@@ -200,7 +199,7 @@ pub trait MetadataProviderExt: MetadataProvider {
         // Collect explicit foreign keys from all tables
         let explicit_relationships: Vec<ForeignKeyInfo> = tables
             .iter()
-            .flat_map(|t| t.foreign_keys.clone())
+            .flat_map(|t| t.table.foreign_keys.clone())
             .collect();
 
         Ok(IntrospectionResult {
@@ -268,9 +267,10 @@ pub trait MetadataProviderExt: MetadataProvider {
         use std::collections::HashMap;
 
         // Separate DB constraints (keep as-is) from inferred (need validation)
-        let (db_constraints, inferred): (Vec<_>, Vec<_>) = relationships
-            .into_iter()
-            .partition(|r| r.source == crate::semantic::inference::RelationshipSource::DatabaseConstraint);
+        let (db_constraints, inferred): (Vec<_>, Vec<_>) =
+            relationships.into_iter().partition(|r| {
+                r.source == crate::semantic::inference::RelationshipSource::DatabaseConstraint
+            });
 
         if inferred.is_empty() {
             return (db_constraints, 0);
