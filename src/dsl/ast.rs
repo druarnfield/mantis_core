@@ -10,6 +10,7 @@
 //! - Report definitions
 
 use crate::dsl::span::{Span, Spanned};
+use crate::model::expr::Expr;
 use serde::{Deserialize, Serialize};
 
 // ============================================================================
@@ -496,22 +497,7 @@ pub enum SlicerKind {
     /// Derived slicer via FK: `<name> via <fk_slicer>;`
     Via { fk_slicer: String },
     /// Calculated slicer: `<name> <type> = { <sql_expression> };`
-    Calculated { data_type: DataType, expr: SqlExpr },
-}
-
-/// A raw SQL expression wrapped in `{ }`.
-#[derive(Debug, Clone, PartialEq)]
-pub struct SqlExpr {
-    /// The raw SQL expression text (without the braces).
-    pub sql: String,
-    /// The span of the expression (including braces).
-    pub span: Span,
-}
-
-impl SqlExpr {
-    pub fn new(sql: String, span: Span) -> Self {
-        Self { sql, span }
-    }
+    Calculated { data_type: DataType, expr: Expr },
 }
 
 // ============================================================================
@@ -533,9 +519,9 @@ pub struct Measure {
     /// Measure name.
     pub name: Spanned<String>,
     /// Measure expression.
-    pub expr: Spanned<SqlExpr>,
+    pub expr: Spanned<Expr>,
     /// Optional filter condition (WHERE clause).
-    pub filter: Option<Spanned<SqlExpr>>,
+    pub filter: Option<Spanned<Expr>>,
     /// Optional per-measure NULL handling override.
     pub null_handling: Option<Spanned<NullHandling>>,
 }
@@ -560,7 +546,7 @@ pub struct Report {
     /// Measures to display.
     pub show: Vec<Spanned<ShowItem>>,
     /// Filter condition.
-    pub filter: Option<Spanned<SqlExpr>>,
+    pub filter: Option<Spanned<Expr>>,
     /// Sort order.
     pub sort: Vec<Spanned<SortItem>>,
     /// Maximum rows returned.
@@ -681,7 +667,7 @@ pub enum ShowItem {
     /// Inline measure: `<name> = { <expression> }`.
     InlineMeasure {
         name: String,
-        expr: SqlExpr,
+        expr: Expr,
         label: Option<String>,
     },
 }
