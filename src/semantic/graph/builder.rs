@@ -5,9 +5,6 @@
 
 use std::collections::HashMap;
 
-use once_cell::sync::Lazy;
-use regex::Regex;
-
 use crate::dsl::ast::{CalendarBody, Item, Model};
 use crate::metadata::ColumnStats;
 use crate::semantic::inference::InferredRelationship;
@@ -360,7 +357,7 @@ impl UnifiedGraph {
                         entity: entity_name.clone(),
                         aggregation: "CUSTOM".to_string(), // Measures use SQL expressions
                         source_column: None, // Complex measures don't have single source
-                        expression: Some(measure.value.expr.value.sql.clone()),
+                        expression: Some(format!("{:?}", measure.value.expr.value)),
                         metadata: HashMap::new(),
                     };
 
@@ -542,12 +539,9 @@ impl UnifiedGraph {
 
     /// Create DEPENDS_ON edges from measure definitions.
     ///
-    /// Parses measure SQL expressions to find atom references (using @atom_name pattern)
-    /// and creates DEPENDS_ON edges from measures to the columns they reference.
+    /// Extracts atom references from measure expressions and creates DEPENDS_ON edges
+    /// from measures to the columns they reference.
     pub(crate) fn create_depends_on_edges(&mut self, model: &Model) -> GraphBuildResult<()> {
-        // Regex to match atom references: @atom_name
-        static ATOM_PATTERN: Lazy<Regex> = Lazy::new(|| Regex::new(r"@(\w+)").unwrap());
-
         for item in &model.items {
             if let Item::MeasureBlock(measure_block) = &item.value {
                 let entity_name = &measure_block.table.value;
@@ -562,12 +556,11 @@ impl UnifiedGraph {
                             GraphBuildError::InvalidReference(qualified_measure.clone())
                         })?;
 
-                    // Parse SQL expression for atom references
-                    let sql = &measure.value.expr.value.sql;
+                    // Extract atom references from the expression AST
+                    let atom_refs = measure.value.expr.value.atom_refs();
                     let mut referenced_columns = Vec::new();
 
-                    for cap in ATOM_PATTERN.captures_iter(sql) {
-                        let atom_name = &cap[1];
+                    for atom_name in atom_refs {
                         let qualified_col = format!("{}.{}", entity_name, atom_name);
 
                         // Verify the column exists

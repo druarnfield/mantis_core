@@ -224,7 +224,9 @@ fn validate_circular_dependencies(model: &Model, errors: &mut Vec<ValidationErro
 
         // Build dependency graph
         for (measure_name, measure) in &measure_block.measures {
-            let deps = extract_measure_references(&measure.expr.sql);
+            // TODO: Implement proper measure reference extraction from Expr AST
+            let sql_debug = format!("{:?}", measure.expr);
+            let deps = extract_measure_references(&sql_debug);
             graph.insert(measure_name.clone(), deps);
         }
 
