@@ -151,3 +151,7 @@ path = "tests/planner/integration_test.rs"
 [[test]]
 name = "expr_converter_test"
 path = "tests/planner/expr_converter_test.rs"
+
+[[test]]
+name = "join_builder_test"
+path = "tests/planner/join_builder_test.rs"

@@ -2,7 +2,7 @@
 
 use crate::model::expr::Expr;
 use crate::model::TimeSuffix;
-use crate::semantic::graph::Cardinality;
+use crate::semantic::graph::{query::ColumnRef as GraphColumnRef, Cardinality};
 
 /// Logical plan - abstract operation tree.
 #[derive(Debug, Clone, PartialEq)]
@@ -30,22 +30,32 @@ pub struct ScanNode {
     pub entity: String,
 }
 
+/// Join type.
+#[derive(Debug, Clone, PartialEq)]
+pub enum JoinType {
+    Inner,
+    Left,
+    Right,
+    Full,
+}
+
 /// Join two plans.
 #[derive(Debug, Clone, PartialEq)]
 pub struct JoinNode {
     pub left: Box<LogicalPlan>,
     pub right: Box<LogicalPlan>,
     pub on: JoinCondition,
-    pub cardinality: Cardinality,
+    pub join_type: JoinType,
+    pub cardinality: Option<Cardinality>,
 }
 
 /// Join condition (columns to join on).
 #[derive(Debug, Clone, PartialEq)]
-pub struct JoinCondition {
-    pub left_entity: String,
-    pub left_column: String,
-    pub right_entity: String,
-    pub right_column: String,
+pub enum JoinCondition {
+    /// Equi-join on column pairs (most common)
+    Equi(Vec<(GraphColumnRef, GraphColumnRef)>),
+    /// Complex expression (for theta joins)
+    Expr(Expr),
 }
 
 /// Filter rows.
