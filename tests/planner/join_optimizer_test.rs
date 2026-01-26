@@ -195,3 +195,85 @@ fn test_extract_tables_with_filter() {
     assert!(tables.contains(&"sales".to_string()));
     assert!(tables.contains(&"products".to_string()));
 }
+
+// ============================================================================
+// Task 10: Enumeration Algorithm for Small Joins (≤3 tables)
+// ============================================================================
+
+#[test]
+fn test_enumerate_two_table_join() {
+    // Test that enumerate_join_orders() generates both possible orders for 2 tables
+    let graph = create_test_graph();
+    let optimizer = JoinOrderOptimizer::new(&graph);
+
+    let plan = create_two_table_join();
+
+    let candidates = optimizer.enumerate_join_orders(&plan);
+
+    // Should generate 2! = 2 permutations
+    assert_eq!(
+        candidates.len(),
+        2,
+        "Should generate 2 join orders for 2 tables"
+    );
+
+    // Both orders should be valid (different table orderings)
+    // We can't easily check the exact order without PhysicalPlan equality,
+    // but we can verify all candidates are non-empty
+    for candidate in &candidates {
+        assert!(candidate.is_some(), "All candidates should be valid plans");
+    }
+}
+
+#[test]
+fn test_enumerate_three_table_join() {
+    // Test that enumerate_join_orders() generates all 6 permutations for 3 tables
+    let graph = create_test_graph();
+    let optimizer = JoinOrderOptimizer::new(&graph);
+
+    let plan = create_three_table_join();
+
+    let candidates = optimizer.enumerate_join_orders(&plan);
+
+    // Should generate 3! = 6 permutations (some may be None if no valid join path)
+    assert_eq!(
+        candidates.len(),
+        6,
+        "Should generate 6 join orders for 3 tables"
+    );
+
+    // At least some candidates should be valid
+    let valid_count = candidates.iter().filter(|c| c.is_some()).count();
+    assert!(valid_count > 0, "Should have at least one valid join order");
+
+    // For our test graph (sales → products → categories chain),
+    // only certain orders have valid join paths. Example valid orders:
+    // - sales, products, categories (original chain)
+    // - products, sales, categories (reverse first link)
+    // Invalid orders like sales, categories, products won't work
+    // because there's no direct sales→categories edge
+}
+
+#[test]
+fn test_enumerate_single_table() {
+    // Test that enumerate_join_orders() handles single table (no joins)
+    let graph = create_test_graph();
+    let optimizer = JoinOrderOptimizer::new(&graph);
+
+    let plan = LogicalPlan::Scan(ScanNode {
+        entity: "sales".to_string(),
+    });
+
+    let candidates = optimizer.enumerate_join_orders(&plan);
+
+    // Single table should return just one "order" (itself)
+    assert_eq!(
+        candidates.len(),
+        1,
+        "Single table should return one candidate"
+    );
+    assert!(
+        candidates[0].is_some(),
+        "Single table candidate should be valid"
+    );
+}
