@@ -13,6 +13,10 @@ path = "src/lib.rs"
 name = "mantis"
 path = "src/bin/main.rs"
 
+[[bin]]
+name = "schema_gen"
+path = "src/bin/schema_gen.rs"
+
 [dependencies]
 mlua = { version = "0.10", features = ["lua54", "vendored"] }
 petgraph = "0.6"

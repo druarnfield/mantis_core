@@ -1,6 +1,7 @@
 //! Physical execution plan nodes.
 
 use crate::model::expr::Expr as ModelExpr;
+use crate::planner::expr_converter::{ExprConverter, QueryContext};
 use crate::sql::expr::col;
 use crate::sql::query::{OrderByExpr, Query, SelectExpr, SortDir, TableRef};
 
@@ -80,14 +81,55 @@ pub struct SortKey {
 }
 
 impl PhysicalPlan {
+    /// Extract table information from the physical plan to build a QueryContext.
+    /// This walks the plan tree to find all table scans and adds them to the context.
+    fn extract_query_context(&self) -> QueryContext {
+        let mut context = QueryContext::new();
+        self.populate_query_context(&mut context);
+        context
+    }
+
+    /// Recursively populate the query context with table information.
+    fn populate_query_context(&self, context: &mut QueryContext) {
+        match self {
+            PhysicalPlan::TableScan { table, .. } => {
+                // Use the table name as both entity and alias
+                context.add_table(table.clone(), table.clone());
+            }
+            PhysicalPlan::Filter { input, .. }
+            | PhysicalPlan::Project { input, .. }
+            | PhysicalPlan::Sort { input, .. }
+            | PhysicalPlan::Limit { input, .. }
+            | PhysicalPlan::HashAggregate { input, .. } => {
+                input.populate_query_context(context);
+            }
+            PhysicalPlan::HashJoin { left, right, .. }
+            | PhysicalPlan::NestedLoopJoin { left, right, .. } => {
+                left.populate_query_context(context);
+                right.populate_query_context(context);
+            }
+        }
+    }
+
     /// Convert physical plan to SQL query
     pub fn to_query(&self) -> Query {
         match self {
             PhysicalPlan::TableScan { table, .. } => Query::new().from(TableRef::new(table)),
-            PhysicalPlan::Filter { input, .. } => {
-                // For now, just pass through the input's query
-                // TODO: Add WHERE clause when we have ModelExpr -> SqlExpr conversion
-                input.to_query()
+            PhysicalPlan::Filter { input, predicate } => {
+                let mut query = input.to_query();
+
+                // Extract query context for expression conversion
+                let context = self.extract_query_context();
+
+                // Convert predicate from ModelExpr to SqlExpr
+                // Note: If conversion fails, we panic. This is acceptable for now since
+                // it indicates a programming error in the plan generation.
+                let sql_predicate = ExprConverter::convert(predicate, &context)
+                    .expect("Failed to convert filter predicate to SQL");
+
+                // Add WHERE clause
+                query = query.filter(sql_predicate);
+                query
             }
             PhysicalPlan::Project { input, columns } => {
                 let query = input.to_query();
@@ -149,5 +191,81 @@ impl PhysicalPlan {
                 left_query
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::expr::{BinaryOp, Expr as ModelExpr, Literal};
+    use crate::sql::Dialect;
+
+    #[test]
+    fn test_filter_to_query_with_predicate() {
+        // Create a simple filter: WHERE sales.amount > 100
+        let predicate = ModelExpr::BinaryOp {
+            left: Box::new(ModelExpr::Column {
+                entity: Some("sales".to_string()),
+                column: "amount".to_string(),
+            }),
+            op: BinaryOp::Gt,
+            right: Box::new(ModelExpr::Literal(Literal::Int(100))),
+        };
+
+        let plan = PhysicalPlan::Filter {
+            input: Box::new(PhysicalPlan::TableScan {
+                table: "sales".to_string(),
+                strategy: TableScanStrategy::FullScan,
+                estimated_rows: None,
+            }),
+            predicate,
+        };
+
+        let query = plan.to_query();
+        let sql = query.to_sql(Dialect::Postgres);
+
+        // Should have WHERE clause with the predicate
+        assert!(
+            sql.contains("WHERE"),
+            "Query should contain WHERE clause, got: {}",
+            sql
+        );
+        assert!(
+            sql.contains("amount") && sql.contains("100"),
+            "Query should contain predicate, got: {}",
+            sql
+        );
+    }
+
+    #[test]
+    fn test_filter_to_query_with_entity_qualified_column() {
+        // Test that entity names are properly converted to table aliases in WHERE clause
+        let predicate = ModelExpr::BinaryOp {
+            left: Box::new(ModelExpr::Column {
+                entity: Some("sales".to_string()),
+                column: "region".to_string(),
+            }),
+            op: BinaryOp::Eq,
+            right: Box::new(ModelExpr::Literal(Literal::String("WEST".to_string()))),
+        };
+
+        let plan = PhysicalPlan::Filter {
+            input: Box::new(PhysicalPlan::TableScan {
+                table: "sales".to_string(),
+                strategy: TableScanStrategy::FullScan,
+                estimated_rows: None,
+            }),
+            predicate,
+        };
+
+        let query = plan.to_query();
+        let sql = query.to_sql(Dialect::Postgres);
+
+        // Should have WHERE clause with qualified column
+        assert!(
+            sql.contains("WHERE"),
+            "Query should contain WHERE clause, got: {}",
+            sql
+        );
     }
 }

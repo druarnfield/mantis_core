@@ -60,8 +60,17 @@ impl<'a> PhysicalConverter<'a> {
             ));
         }
 
-        // For now, use first predicate only
-        // TODO: Combine multiple predicates with AND when PhysicalPlan supports it
+        // For now, only support single predicates to avoid silently dropping data
+        // Multiple predicates should be combined with AND in the logical plan
+        if filter.predicates.len() > 1 {
+            return Err(PlanError::PhysicalPlanError(
+                format!(
+                    "Multiple predicates not yet supported (found {}). Combine predicates with AND in logical plan.",
+                    filter.predicates.len()
+                )
+            ));
+        }
+
         let input_candidates = self.convert(&filter.input)?;
         Ok(input_candidates
             .into_iter()
@@ -146,5 +155,100 @@ impl<'a> PhysicalConverter<'a> {
                 limit: usize::try_from(limit.limit).unwrap_or(usize::MAX),
             })
             .collect())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::expr::{BinaryOp, Expr as ModelExpr, Literal};
+    use crate::planner::logical::{FilterNode, LogicalPlan, ScanNode};
+
+    fn create_test_graph() -> UnifiedGraph {
+        UnifiedGraph::new()
+    }
+
+    #[test]
+    fn test_convert_filter_with_multiple_predicates_should_error() {
+        let graph = create_test_graph();
+        let converter = PhysicalConverter::new(&graph);
+
+        // Create a filter with multiple predicates
+        let predicate1 = ModelExpr::BinaryOp {
+            left: Box::new(ModelExpr::Column {
+                entity: Some("sales".to_string()),
+                column: "amount".to_string(),
+            }),
+            op: BinaryOp::Gt,
+            right: Box::new(ModelExpr::Literal(Literal::Int(100))),
+        };
+
+        let predicate2 = ModelExpr::BinaryOp {
+            left: Box::new(ModelExpr::Column {
+                entity: Some("sales".to_string()),
+                column: "region".to_string(),
+            }),
+            op: BinaryOp::Eq,
+            right: Box::new(ModelExpr::Literal(Literal::String("WEST".to_string()))),
+        };
+
+        let filter = LogicalPlan::Filter(FilterNode {
+            input: Box::new(LogicalPlan::Scan(ScanNode {
+                entity: "sales".to_string(),
+            })),
+            predicates: vec![predicate1, predicate2],
+        });
+
+        // Should return an error instead of silently dropping predicates
+        let result = converter.convert(&filter);
+        assert!(
+            result.is_err(),
+            "Converting filter with multiple predicates should return an error"
+        );
+
+        if let Err(e) = result {
+            let error_msg = format!("{:?}", e);
+            assert!(
+                error_msg.contains("multiple predicates")
+                    || error_msg.contains("Multiple predicates"),
+                "Error message should mention multiple predicates, got: {}",
+                error_msg
+            );
+        }
+    }
+
+    #[test]
+    fn test_convert_filter_with_single_predicate_succeeds() {
+        let graph = create_test_graph();
+        let converter = PhysicalConverter::new(&graph);
+
+        let predicate = ModelExpr::BinaryOp {
+            left: Box::new(ModelExpr::Column {
+                entity: Some("sales".to_string()),
+                column: "amount".to_string(),
+            }),
+            op: BinaryOp::Gt,
+            right: Box::new(ModelExpr::Literal(Literal::Int(100))),
+        };
+
+        let filter = LogicalPlan::Filter(FilterNode {
+            input: Box::new(LogicalPlan::Scan(ScanNode {
+                entity: "sales".to_string(),
+            })),
+            predicates: vec![predicate.clone()],
+        });
+
+        let result = converter.convert(&filter);
+        assert!(result.is_ok(), "Single predicate filter should succeed");
+
+        let plans = result.unwrap();
+        assert_eq!(plans.len(), 1);
+
+        match &plans[0] {
+            PhysicalPlan::Filter { predicate: p, .. } => {
+                assert_eq!(p, &predicate);
+            }
+            _ => panic!("Expected Filter plan"),
+        }
     }
 }
