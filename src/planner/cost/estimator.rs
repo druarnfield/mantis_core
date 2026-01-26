@@ -39,7 +39,7 @@ impl<'a> CostEstimator<'a> {
     ///
     /// Returns a CostEstimate with detailed breakdown of rows, CPU, IO, and memory costs.
     pub fn estimate(&self, plan: &PhysicalPlan) -> CostEstimate {
-        match plan {
+        let cost = match plan {
             PhysicalPlan::TableScan {
                 table, strategy, ..
             } => {
@@ -52,12 +52,20 @@ impl<'a> CostEstimator<'a> {
                     TableScanStrategy::IndexScan { .. } => (row_count as f64) * 0.1, // 10% of rows
                 };
 
-                CostEstimate {
+                let cost = CostEstimate {
                     rows_out: row_count,
                     cpu_cost: row_count as f64, // CPU cost for scanning each row
                     io_cost,
                     memory_cost: 0.0, // Table scan doesn't use memory
-                }
+                };
+
+                #[cfg(debug_assertions)]
+                eprintln!(
+                    "[TRACE] TableScan[{}] -> rows={}, cpu={:.2}, io={:.2}, memory={:.2}",
+                    table, cost.rows_out, cost.cpu_cost, cost.io_cost, cost.memory_cost
+                );
+
+                cost
             }
             PhysicalPlan::Filter { input, predicate } => {
                 // Get input cost
@@ -69,7 +77,7 @@ impl<'a> CostEstimator<'a> {
                 // Calculate output rows after filtering
                 let rows_out = ((input_cost.rows_out as f64) * selectivity) as usize;
 
-                CostEstimate {
+                let cost = CostEstimate {
                     rows_out,
                     // CPU cost: input CPU + evaluating predicate for each input row
                     cpu_cost: input_cost.cpu_cost + (input_cost.rows_out as f64),
@@ -77,7 +85,15 @@ impl<'a> CostEstimator<'a> {
                     io_cost: input_cost.io_cost,
                     // Memory cost unchanged
                     memory_cost: input_cost.memory_cost,
-                }
+                };
+
+                #[cfg(debug_assertions)]
+                eprintln!(
+                    "[TRACE] Filter[selectivity={:.3}] -> rows={} (from {}), cpu={:.2}, io={:.2}, memory={:.2}",
+                    selectivity, cost.rows_out, input_cost.rows_out, cost.cpu_cost, cost.io_cost, cost.memory_cost
+                );
+
+                cost
             }
             PhysicalPlan::HashJoin { left, right, .. } => {
                 // Estimate costs for both sides
@@ -87,7 +103,7 @@ impl<'a> CostEstimator<'a> {
                 // Estimate join cardinality using graph metadata
                 let rows_out = self.estimate_join_cardinality(left, right, &left_cost, &right_cost);
 
-                CostEstimate {
+                let cost = CostEstimate {
                     rows_out,
                     // CPU cost: scan both sides + build hash table + probe
                     cpu_cost: left_cost.cpu_cost + right_cost.cpu_cost + (rows_out as f64),
@@ -95,7 +111,15 @@ impl<'a> CostEstimator<'a> {
                     io_cost: left_cost.io_cost + right_cost.io_cost,
                     // Memory cost: smaller side for hash table
                     memory_cost: left_cost.rows_out.min(right_cost.rows_out) as f64,
-                }
+                };
+
+                #[cfg(debug_assertions)]
+                eprintln!(
+                    "[TRACE] HashJoin[left={}, right={}] -> rows={}, cpu={:.2}, io={:.2}, memory={:.2}",
+                    left_cost.rows_out, right_cost.rows_out, cost.rows_out, cost.cpu_cost, cost.io_cost, cost.memory_cost
+                );
+
+                cost
             }
             PhysicalPlan::NestedLoopJoin { left, right, .. } => {
                 // Estimate costs for both sides
@@ -105,7 +129,7 @@ impl<'a> CostEstimator<'a> {
                 // Estimate join cardinality using graph metadata
                 let rows_out = self.estimate_join_cardinality(left, right, &left_cost, &right_cost);
 
-                CostEstimate {
+                let cost = CostEstimate {
                     rows_out,
                     // CPU cost: nested loop = left * right comparisons
                     cpu_cost: left_cost.cpu_cost
@@ -114,7 +138,15 @@ impl<'a> CostEstimator<'a> {
                     io_cost: left_cost.io_cost + right_cost.io_cost,
                     // Memory cost: no hash table needed
                     memory_cost: 0.0,
-                }
+                };
+
+                #[cfg(debug_assertions)]
+                eprintln!(
+                    "[TRACE] NestedLoopJoin[left={}, right={}] -> rows={}, cpu={:.2}, io={:.2}, memory={:.2}",
+                    left_cost.rows_out, right_cost.rows_out, cost.rows_out, cost.cpu_cost, cost.io_cost, cost.memory_cost
+                );
+
+                cost
             }
             PhysicalPlan::HashAggregate {
                 input, group_by, ..
@@ -125,7 +157,7 @@ impl<'a> CostEstimator<'a> {
                 // Estimate GROUP BY cardinality using graph metadata
                 let rows_out = self.estimate_group_cardinality(&input_cost, group_by);
 
-                CostEstimate {
+                let cost = CostEstimate {
                     rows_out,
                     // CPU cost: scan input + hash grouping
                     cpu_cost: input_cost.cpu_cost + (input_cost.rows_out as f64),
@@ -133,10 +165,20 @@ impl<'a> CostEstimator<'a> {
                     io_cost: input_cost.io_cost,
                     // Memory cost: hash table for groups
                     memory_cost: rows_out as f64,
-                }
+                };
+
+                #[cfg(debug_assertions)]
+                eprintln!(
+                    "[TRACE] HashAggregate[groups={}] -> rows={} (from {}), cpu={:.2}, io={:.2}, memory={:.2}",
+                    group_by.len(), cost.rows_out, input_cost.rows_out, cost.cpu_cost, cost.io_cost, cost.memory_cost
+                );
+
+                cost
             }
             _ => {
                 // For other plan types, use simple fallback for now
+                #[cfg(debug_assertions)]
+                eprintln!("[TRACE] Fallback cost estimate for plan type");
                 CostEstimate {
                     rows_out: 1000,
                     cpu_cost: 1000.0,
@@ -144,7 +186,9 @@ impl<'a> CostEstimator<'a> {
                     memory_cost: 0.0,
                 }
             }
-        }
+        };
+
+        cost
     }
 
     /// Get row count for an entity from the graph.
@@ -329,18 +373,54 @@ impl<'a> CostEstimator<'a> {
         ((input_cost.rows_out as f64) * selectivity).max(1.0) as usize
     }
 
+    /// Select the best physical plan from candidates based on cost estimation.
+    ///
+    /// Logs detailed cost information for each candidate to aid in debugging
+    /// and understanding optimizer decisions.
     pub fn select_best(&self, candidates: Vec<PhysicalPlan>) -> PlanResult<PhysicalPlan> {
         if candidates.is_empty() {
             return Err(PlanError::NoValidPlans);
         }
 
-        // Use new multi-objective cost estimation
-        let best = candidates
-            .into_iter()
-            .min_by_key(|plan| self.estimate(plan).total() as u64)
-            .unwrap();
+        #[cfg(debug_assertions)]
+        eprintln!("[DEBUG] Evaluating {} plan candidates", candidates.len());
 
-        Ok(best)
+        // Estimate cost for each candidate and track results
+        let mut candidates_with_costs: Vec<(PhysicalPlan, CostEstimate)> = candidates
+            .into_iter()
+            .map(|plan| {
+                let cost = self.estimate(&plan);
+                #[cfg(debug_assertions)]
+                eprintln!(
+                    "[DEBUG] Candidate plan cost: rows_out={}, cpu={:.2}, io={:.2}, memory={:.2}, total={:.2}",
+                    cost.rows_out, cost.cpu_cost, cost.io_cost, cost.memory_cost, cost.total()
+                );
+                #[cfg(debug_assertions)]
+                eprintln!("[TRACE] Plan structure: {:?}", plan);
+                (plan, cost)
+            })
+            .collect();
+
+        // Sort by total cost (lowest first)
+        candidates_with_costs.sort_by(|a, b| {
+            a.1.total()
+                .partial_cmp(&b.1.total())
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        // Log the best plan selection
+        let (best_plan, best_cost) = candidates_with_costs
+            .into_iter()
+            .next()
+            .expect("candidates should not be empty");
+
+        #[cfg(debug_assertions)]
+        eprintln!(
+            "[INFO] Selected best plan: rows_out={}, cpu={:.2}, io={:.2}, memory={:.2}, total_cost={:.2}",
+            best_cost.rows_out, best_cost.cpu_cost, best_cost.io_cost, best_cost.memory_cost, best_cost.total()
+        );
+
+        Ok(best_plan)
     }
 
     /// Legacy cost estimation method using simple heuristics.
