@@ -117,6 +117,88 @@ fn convert_unary_op(op: &sql::UnaryOperator, span: Span) -> ParseResult<UnaryOp>
     }
 }
 
+/// Convert sqlparser function to our Function expression
+fn convert_function(func: &sql::Function, span: Span) -> ParseResult<Expr> {
+    let func_name = func.name.to_string().to_uppercase();
+
+    // Check for window function (not supported yet)
+    if func.over.is_some() {
+        return Err(ParseError::UnsupportedFeature {
+            feature: format!("Window function: {}", func_name),
+            span,
+        });
+    }
+
+    // Map function name to our Func enum
+    let our_func = match func_name.as_str() {
+        // Aggregate functions
+        "SUM" => Func::Aggregate(AggregateFunc::Sum),
+        "COUNT" => {
+            // Special handling for COUNT(*) vs COUNT(expr)
+            if let sql::FunctionArguments::List(arg_list) = &func.args {
+                if arg_list.args.len() == 1 {
+                    if matches!(
+                        &arg_list.args[0],
+                        sql::FunctionArg::Unnamed(sql::FunctionArgExpr::Wildcard)
+                    ) {
+                        // COUNT(*) - return early with empty args
+                        return Ok(Expr::Function {
+                            func: Func::Aggregate(AggregateFunc::Count),
+                            args: vec![],
+                        });
+                    }
+                }
+            }
+            Func::Aggregate(AggregateFunc::Count)
+        }
+        "AVG" => Func::Aggregate(AggregateFunc::Avg),
+        "MIN" => Func::Aggregate(AggregateFunc::Min),
+        "MAX" => Func::Aggregate(AggregateFunc::Max),
+
+        // Scalar functions
+        "COALESCE" => Func::Scalar(ScalarFunc::Coalesce),
+        "NULLIF" => Func::Scalar(ScalarFunc::NullIf),
+        "UPPER" => Func::Scalar(ScalarFunc::Upper),
+        "LOWER" => Func::Scalar(ScalarFunc::Lower),
+        "SUBSTRING" | "SUBSTR" => Func::Scalar(ScalarFunc::Substring),
+        "ABS" => Func::Scalar(ScalarFunc::Abs),
+        "ROUND" => Func::Scalar(ScalarFunc::Round),
+        "FLOOR" => Func::Scalar(ScalarFunc::Floor),
+        "CEIL" | "CEILING" => Func::Scalar(ScalarFunc::Ceil),
+
+        // Unsupported function
+        unsupported => {
+            return Err(ParseError::UnsupportedFeature {
+                feature: format!("Function '{}'", unsupported),
+                span,
+            })
+        }
+    };
+
+    // Convert arguments
+    let args = match &func.args {
+        sql::FunctionArguments::List(arg_list) => arg_list
+            .args
+            .iter()
+            .filter_map(|arg| match arg {
+                sql::FunctionArg::Unnamed(sql::FunctionArgExpr::Expr(e)) => Some(e),
+                sql::FunctionArg::Named {
+                    arg: sql::FunctionArgExpr::Expr(e),
+                    ..
+                } => Some(e),
+                _ => None,
+            })
+            .map(|e| convert_expr(e, span.clone()))
+            .collect::<Result<Vec<_>, _>>()?,
+        _ => vec![],
+    };
+
+    Ok(Expr::Function {
+        func: our_func,
+        args,
+    })
+}
+
 /// Convert sqlparser expression to our Expr type
 fn convert_expr(sql_expr: &sql::Expr, span: Span) -> ParseResult<Expr> {
     match sql_expr {
@@ -199,6 +281,9 @@ fn convert_expr(sql_expr: &sql::Expr, span: Span) -> ParseResult<Expr> {
             op: UnaryOp::IsNotNull,
             expr: Box::new(convert_expr(expr, span)?),
         }),
+
+        // Function calls
+        sql::Expr::Function(func) => convert_function(func, span),
 
         // For now, return error for other types - we'll implement them in next tasks
         unsupported => Err(ParseError::UnsupportedFeature {
@@ -439,6 +524,127 @@ mod tests {
                 );
             }
             _ => panic!("Expected UnaryOp"),
+        }
+    }
+
+    #[test]
+    fn test_convert_aggregate_function() {
+        // SUM(@revenue)
+        let arg = sql::Expr::Identifier(sql::Ident::new("__ATOM__revenue"));
+        let func = sql::Function {
+            name: sql::ObjectName(vec![sql::Ident::new("SUM")]),
+            args: sql::FunctionArguments::List(sql::FunctionArgumentList {
+                duplicate_treatment: None,
+                args: vec![sql::FunctionArg::Unnamed(sql::FunctionArgExpr::Expr(arg))],
+                clauses: vec![],
+            }),
+            filter: None,
+            null_treatment: None,
+            over: None,
+            within_group: vec![],
+        };
+        let expr = sql::Expr::Function(func);
+
+        let result = convert_expr(&expr, 0..13).unwrap();
+        match result {
+            Expr::Function {
+                func: Func::Aggregate(AggregateFunc::Sum),
+                args,
+            } => {
+                assert_eq!(args.len(), 1);
+                assert_eq!(args[0], Expr::AtomRef("revenue".to_string()));
+            }
+            _ => panic!("Expected aggregate function"),
+        }
+    }
+
+    #[test]
+    fn test_convert_scalar_function() {
+        // COALESCE(@discount, 0)
+        let arg1 = sql::Expr::Identifier(sql::Ident::new("__ATOM__discount"));
+        let arg2 = sql::Expr::Value(sql::Value::Number("0".to_string(), false));
+        let func = sql::Function {
+            name: sql::ObjectName(vec![sql::Ident::new("COALESCE")]),
+            args: sql::FunctionArguments::List(sql::FunctionArgumentList {
+                duplicate_treatment: None,
+                args: vec![
+                    sql::FunctionArg::Unnamed(sql::FunctionArgExpr::Expr(arg1)),
+                    sql::FunctionArg::Unnamed(sql::FunctionArgExpr::Expr(arg2)),
+                ],
+                clauses: vec![],
+            }),
+            filter: None,
+            null_treatment: None,
+            over: None,
+            within_group: vec![],
+        };
+        let expr = sql::Expr::Function(func);
+
+        let result = convert_expr(&expr, 0..22).unwrap();
+        match result {
+            Expr::Function {
+                func: Func::Scalar(ScalarFunc::Coalesce),
+                args,
+            } => {
+                assert_eq!(args.len(), 2);
+            }
+            _ => panic!("Expected scalar function"),
+        }
+    }
+
+    #[test]
+    fn test_convert_count_star() {
+        // COUNT(*)
+        let func = sql::Function {
+            name: sql::ObjectName(vec![sql::Ident::new("COUNT")]),
+            args: sql::FunctionArguments::List(sql::FunctionArgumentList {
+                duplicate_treatment: None,
+                args: vec![sql::FunctionArg::Unnamed(sql::FunctionArgExpr::Wildcard)],
+                clauses: vec![],
+            }),
+            filter: None,
+            null_treatment: None,
+            over: None,
+            within_group: vec![],
+        };
+        let expr = sql::Expr::Function(func);
+
+        let result = convert_expr(&expr, 0..8).unwrap();
+        match result {
+            Expr::Function {
+                func: Func::Aggregate(AggregateFunc::Count),
+                args,
+            } => {
+                assert_eq!(args.len(), 0); // COUNT(*) has no args
+            }
+            _ => panic!("Expected COUNT(*)"),
+        }
+    }
+
+    #[test]
+    fn test_unsupported_function_error() {
+        let arg = sql::Expr::Identifier(sql::Ident::new("x"));
+        let func = sql::Function {
+            name: sql::ObjectName(vec![sql::Ident::new("UNSUPPORTED_FUNC")]),
+            args: sql::FunctionArguments::List(sql::FunctionArgumentList {
+                duplicate_treatment: None,
+                args: vec![sql::FunctionArg::Unnamed(sql::FunctionArgExpr::Expr(arg))],
+                clauses: vec![],
+            }),
+            filter: None,
+            null_treatment: None,
+            over: None,
+            within_group: vec![],
+        };
+        let expr = sql::Expr::Function(func);
+
+        let result = convert_expr(&expr, 0..20);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            ParseError::UnsupportedFeature { feature, .. } => {
+                assert!(feature.contains("UNSUPPORTED_FUNC"));
+            }
+            _ => panic!("Expected UnsupportedFeature error"),
         }
     }
 }
