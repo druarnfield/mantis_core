@@ -245,7 +245,7 @@ mod tests {
     }
 
     #[test]
-    fn test_convert_filter_with_multiple_predicates_should_error() {
+    fn test_convert_filter_with_multiple_predicates_combines_with_and() {
         let graph = create_test_graph();
         let converter = PhysicalConverter::new(&graph);
 
@@ -272,24 +272,36 @@ mod tests {
             input: Box::new(LogicalPlan::Scan(ScanNode {
                 entity: "sales".to_string(),
             })),
-            predicates: vec![predicate1, predicate2],
+            predicates: vec![predicate1.clone(), predicate2.clone()],
         });
 
-        // Should return an error instead of silently dropping predicates
+        // Should succeed and combine predicates with AND
         let result = converter.convert(&filter);
         assert!(
-            result.is_err(),
-            "Converting filter with multiple predicates should return an error"
+            result.is_ok(),
+            "Converting filter with multiple predicates should succeed"
         );
 
-        if let Err(e) = result {
-            let error_msg = format!("{:?}", e);
-            assert!(
-                error_msg.contains("multiple predicates")
-                    || error_msg.contains("Multiple predicates"),
-                "Error message should mention multiple predicates, got: {}",
-                error_msg
-            );
+        let plans = result.unwrap();
+        assert_eq!(plans.len(), 1);
+
+        // Verify the combined predicate is an AND operation
+        match &plans[0] {
+            PhysicalPlan::Filter { predicate, .. } => {
+                match predicate {
+                    ModelExpr::BinaryOp {
+                        op: BinaryOp::And,
+                        left,
+                        right,
+                    } => {
+                        // Left should be predicate1, right should be predicate2
+                        assert_eq!(**left, predicate1);
+                        assert_eq!(**right, predicate2);
+                    }
+                    _ => panic!("Expected combined predicate to be AND operation"),
+                }
+            }
+            _ => panic!("Expected Filter plan"),
         }
     }
 
