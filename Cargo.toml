@@ -197,6 +197,10 @@ name = "join_optimizer_test"
 path = "tests/planner/join_optimizer_test.rs"
 
 [[test]]
+name = "join_graph_test"
+path = "tests/planner/join_graph_test.rs"
+
+[[test]]
 name = "optimizer_integration_test"
 path = "tests/planner/optimizer_integration_test.rs"
 

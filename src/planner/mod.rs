@@ -8,6 +8,7 @@
 pub mod cost;
 pub mod expr_converter;
 pub mod join_builder;
+pub mod join_optimizer;
 pub mod logical;
 pub mod physical;
 
