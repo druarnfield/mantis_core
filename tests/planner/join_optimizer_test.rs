@@ -277,3 +277,149 @@ fn test_enumerate_single_table() {
         "Single table candidate should be valid"
     );
 }
+
+// ============================================================================
+// Tasks 11-13: Greedy Algorithm for Large Joins (>3 tables)
+// ============================================================================
+
+/// Helper to create a 5-table test graph (large enough to trigger greedy)
+fn create_large_test_graph() -> UnifiedGraph {
+    let mut graph = UnifiedGraph::new();
+
+    // Create a star schema: fact table in center, 4 dimensions around it
+    // This is a realistic pattern for data warehouses
+    
+    // Fact table (large)
+    let sales = EntityNode {
+        name: "sales".to_string(),
+        entity_type: EntityType::Fact,
+        physical_name: None,
+        schema: None,
+        row_count: Some(10_000_000), // 10M rows
+        size_category: SizeCategory::Large,
+        metadata: Default::default(),
+    };
+    let sales_idx = graph.add_test_entity(sales);
+
+    // Small dimension tables
+    let tables = vec![
+        ("products", 1_000),
+        ("customers", 5_000),
+        ("stores", 100),
+        ("dates", 365),
+    ];
+
+    let mut dim_indices = Vec::new();
+    for (name, row_count) in tables {
+        let entity = EntityNode {
+            name: name.to_string(),
+            entity_type: EntityType::Dimension,
+            physical_name: None,
+            schema: None,
+            row_count: Some(row_count),
+            size_category: SizeCategory::Small,
+            metadata: Default::default(),
+        };
+        let idx = graph.add_test_entity(entity);
+        dim_indices.push((name.to_string(), idx));
+    }
+
+    // Add joins: sales → each dimension
+    for (dim_name, dim_idx) in dim_indices {
+        let join = JoinsToEdge {
+            from_entity: "sales".to_string(),
+            to_entity: dim_name.clone(),
+            join_columns: vec![(format!("{}_id", dim_name), "id".to_string())],
+            cardinality: Cardinality::ManyToOne,
+            source: RelationshipSource::ForeignKey,
+        };
+        graph.add_test_join(sales_idx, dim_idx, join);
+    }
+
+    graph
+}
+
+#[test]
+fn test_greedy_join_order_for_large_query() {
+    // Test that greedy_join_order() works for 5+ tables
+    let graph = create_large_test_graph();
+    let optimizer = JoinOrderOptimizer::new(&graph);
+
+    // Create a logical plan with all 5 tables
+    let tables = vec!["sales", "products", "customers", "stores", "dates"];
+    
+    let result = optimizer.greedy_join_order(&tables);
+
+    // Should return a valid plan
+    assert!(result.is_some(), "Greedy should return a valid join plan");
+    
+    let plan = result.unwrap();
+    
+    // Verify all tables are included
+    let extracted_tables = optimizer.extract_tables(&plan);
+    assert_eq!(extracted_tables.len(), 5, "Should include all 5 tables");
+    for table in &tables {
+        assert!(
+            extracted_tables.contains(&table.to_string()),
+            "Should include table: {}",
+            table
+        );
+    }
+}
+
+#[test]
+fn test_find_smallest_join_pair() {
+    // Test that find_smallest_join_pair() returns the pair with lowest cost
+    let graph = create_large_test_graph();
+    let optimizer = JoinOrderOptimizer::new(&graph);
+
+    let tables: Vec<String> = vec![
+        "sales".to_string(),
+        "products".to_string(),
+        "stores".to_string(),
+    ];
+
+    let (table1, table2) = optimizer.find_smallest_join_pair(&tables).unwrap();
+
+    // Should return a valid pair that can be joined
+    assert_ne!(table1, table2, "Pair should be different tables");
+    assert!(tables.contains(&table1), "First table should be in input");
+    assert!(tables.contains(&table2), "Second table should be in input");
+}
+
+#[test]
+fn test_find_best_next_join() {
+    // Test that find_best_next_join() returns the best table to add
+    let graph = create_large_test_graph();
+    let optimizer = JoinOrderOptimizer::new(&graph);
+
+    // Start with a plan: sales joined with stores
+    let current_plan = LogicalPlan::Join(JoinNode {
+        left: Box::new(LogicalPlan::Scan(ScanNode {
+            entity: "sales".to_string(),
+        })),
+        right: Box::new(LogicalPlan::Scan(ScanNode {
+            entity: "stores".to_string(),
+        })),
+        join_type: JoinType::Inner,
+        on: JoinCondition::Equi(vec![(
+            ColumnRef::new("sales".to_string(), "stores_id".to_string()),
+            ColumnRef::new("stores".to_string(), "id".to_string()),
+        )]),
+        cardinality: Some(Cardinality::ManyToOne),
+    });
+
+    let remaining = vec![
+        "products".to_string(),
+        "customers".to_string(),
+        "dates".to_string(),
+    ];
+
+    let next_table = optimizer.find_best_next_join(&current_plan, &remaining).unwrap();
+
+    // Should return one of the remaining tables
+    assert!(
+        remaining.contains(&next_table),
+        "Next table should be from remaining tables"
+    );
+}

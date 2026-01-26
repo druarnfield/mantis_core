@@ -206,6 +206,186 @@ impl<'a> JoinOrderOptimizer<'a> {
         None
     }
 
+    /// Greedy join order optimization for large joins (>3 tables).
+    ///
+    /// Algorithm:
+    /// 1. Find the smallest two-table join pair
+    /// 2. Iteratively add the next-best table to the current plan
+    /// 3. Return the final plan
+    ///
+    /// This is O(n²) complexity, much faster than n! enumeration.
+    pub fn greedy_join_order(&self, tables: &[&str]) -> Option<LogicalPlan> {
+        if tables.is_empty() {
+            return None;
+        }
+
+        if tables.len() == 1 {
+            return Some(LogicalPlan::Scan(ScanNode {
+                entity: tables[0].to_string(),
+            }));
+        }
+
+        // Convert to owned strings for easier manipulation
+        let table_strings: Vec<String> = tables.iter().map(|s| s.to_string()).collect();
+
+        // Step 1: Find smallest pair to start with
+        let (t1, t2) = self.find_smallest_join_pair(&table_strings)?;
+
+        let mut remaining: Vec<String> = table_strings
+            .into_iter()
+            .filter(|t| t != &t1 && t != &t2)
+            .collect();
+
+        // Build initial join
+        let join_info = self.find_join_info(&t1, &t2)?;
+        let mut current_plan = LogicalPlan::Join(JoinNode {
+            left: Box::new(LogicalPlan::Scan(ScanNode { entity: t1.clone() })),
+            right: Box::new(LogicalPlan::Scan(ScanNode { entity: t2.clone() })),
+            join_type: JoinType::Inner,
+            on: join_info.condition,
+            cardinality: join_info.cardinality,
+        });
+
+        // Step 2: Iteratively add best next table
+        while !remaining.is_empty() {
+            let next_table = self.find_best_next_join(&current_plan, &remaining)?;
+
+            // Remove from remaining
+            remaining.retain(|t| t != &next_table);
+
+            // Get a table from current plan to join with
+            let current_table = Self::get_leftmost_table(&current_plan)?;
+            let join_info = self.find_join_info(&current_table, &next_table)?;
+
+            // Add to plan
+            current_plan = LogicalPlan::Join(JoinNode {
+                left: Box::new(current_plan),
+                right: Box::new(LogicalPlan::Scan(ScanNode { entity: next_table })),
+                join_type: JoinType::Inner,
+                on: join_info.condition,
+                cardinality: join_info.cardinality,
+            });
+        }
+
+        Some(current_plan)
+    }
+
+    /// Find the pair of tables with the smallest join cost (Task 12).
+    ///
+    /// Tries all pairs, estimates cost, returns the pair with lowest cost.
+    pub fn find_smallest_join_pair(&self, tables: &[String]) -> Option<(String, String)> {
+        if tables.len() < 2 {
+            return None;
+        }
+
+        let mut best_pair: Option<(String, String)> = None;
+        let mut best_cost = f64::MAX;
+
+        // Try all pairs
+        for i in 0..tables.len() {
+            for j in (i + 1)..tables.len() {
+                let t1 = &tables[i];
+                let t2 = &tables[j];
+
+                // Check if this pair can be joined
+                if self.find_join_info(t1, t2).is_some() {
+                    // Estimate cost of joining these two tables
+                    let cost = self.estimate_pair_cost(t1, t2);
+
+                    if cost < best_cost {
+                        best_cost = cost;
+                        best_pair = Some((t1.clone(), t2.clone()));
+                    }
+                }
+            }
+        }
+
+        best_pair
+    }
+
+    /// Find the best table to join next to the current plan (Task 13).
+    ///
+    /// Tries each remaining table, estimates cost of adding it, returns the best.
+    pub fn find_best_next_join(
+        &self,
+        current_plan: &LogicalPlan,
+        remaining_tables: &[String],
+    ) -> Option<String> {
+        if remaining_tables.is_empty() {
+            return None;
+        }
+
+        let mut best_table: Option<String> = None;
+        let mut best_cost = f64::MAX;
+
+        // Get tables already in current plan
+        let current_tables = self.extract_tables(current_plan);
+
+        // Try each remaining table
+        for table in remaining_tables {
+            // Check if we can join this table to any table in current plan
+            let can_join = current_tables.iter().any(|ct| {
+                self.find_join_info(ct, table).is_some() || self.find_join_info(table, ct).is_some()
+            });
+
+            if can_join {
+                // Estimate cost of adding this table
+                let cost = self.estimate_add_cost(current_plan, table);
+
+                if cost < best_cost {
+                    best_cost = cost;
+                    best_table = Some(table.clone());
+                }
+            }
+        }
+
+        best_table
+    }
+
+    /// Estimate cost of joining two tables.
+    fn estimate_pair_cost(&self, t1: &str, t2: &str) -> f64 {
+        let cost_estimator = CostEstimator::new(self.graph);
+
+        // Create simple scans
+        let plan1 = PhysicalPlan::TableScan {
+            table: t1.to_string(),
+            strategy: crate::planner::physical::TableScanStrategy::FullScan,
+            estimated_rows: None,
+        };
+
+        let plan2 = PhysicalPlan::TableScan {
+            table: t2.to_string(),
+            strategy: crate::planner::physical::TableScanStrategy::FullScan,
+            estimated_rows: None,
+        };
+
+        // Create join
+        let join_plan = PhysicalPlan::HashJoin {
+            left: Box::new(plan1),
+            right: Box::new(plan2),
+            on: vec![], // Simplified - actual join columns don't matter for cost
+            estimated_rows: None,
+        };
+
+        let cost = cost_estimator.estimate(&join_plan);
+        cost.total()
+    }
+
+    /// Estimate cost of adding a table to current plan.
+    fn estimate_add_cost(&self, _current_plan: &LogicalPlan, table: &str) -> f64 {
+        // Simplified: cost is based on table size
+        // Smaller tables are cheaper to add
+        if let Some(idx) = self.graph.entity_index(table) {
+            if let Some(crate::semantic::graph::GraphNode::Entity(entity)) =
+                self.graph.graph().node_weight(idx)
+            {
+                return entity.row_count.unwrap_or(1_000_000) as f64;
+            }
+        }
+
+        1_000_000.0 // Default cost
+    }
+
     /// Recursively collect table names from a logical plan.
     fn collect_tables(&self, plan: &LogicalPlan, tables: &mut HashSet<String>) {
         match plan {
