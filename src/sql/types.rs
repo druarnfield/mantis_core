@@ -153,10 +153,11 @@ impl DataType {
             "bool" | "boolean" | "bit" => Some(DataType::Bool),
 
             // Integers
-            "tinyint" | "int8" => Some(DataType::Int8),
-            "smallint" | "int16" | "int2" => Some(DataType::Int16),
-            "int" | "integer" | "int32" | "int4" => Some(DataType::Int32),
-            "bigint" | "int64" => Some(DataType::Int64),
+            // Note: int8 = PostgreSQL's BIGINT (8 bytes), not 8-bit integer
+            "tinyint" => Some(DataType::Int8),
+            "smallint" | "int2" => Some(DataType::Int16),
+            "int" | "integer" | "int4" => Some(DataType::Int32),
+            "bigint" | "int8" => Some(DataType::Int64),
 
             // Floating point
             "real" | "float4" | "float32" => Some(DataType::Float32),
