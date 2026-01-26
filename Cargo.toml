@@ -149,6 +149,10 @@ name = "cost_estimate_test"
 path = "tests/planner/cost_estimate_test.rs"
 
 [[test]]
+name = "table_scan_cost_test"
+path = "tests/planner/table_scan_cost_test.rs"
+
+[[test]]
 name = "planner_integration_test"
 path = "tests/planner/integration_test.rs"
 

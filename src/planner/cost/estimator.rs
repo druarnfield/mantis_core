@@ -1,6 +1,6 @@
 //! Cost estimation for physical plans.
 
-use crate::planner::physical::PhysicalPlan;
+use crate::planner::physical::{PhysicalPlan, TableScanStrategy};
 use crate::planner::{PlanError, PlanResult};
 use crate::semantic::graph::UnifiedGraph;
 
@@ -27,13 +27,64 @@ impl CostEstimate {
 }
 
 pub struct CostEstimator<'a> {
-    #[allow(dead_code)]
     graph: &'a UnifiedGraph,
 }
 
 impl<'a> CostEstimator<'a> {
     pub fn new(graph: &'a UnifiedGraph) -> Self {
         Self { graph }
+    }
+
+    /// Estimate cost for a physical plan using UnifiedGraph metadata.
+    ///
+    /// Returns a CostEstimate with detailed breakdown of rows, CPU, IO, and memory costs.
+    pub fn estimate(&self, plan: &PhysicalPlan) -> CostEstimate {
+        match plan {
+            PhysicalPlan::TableScan {
+                table, strategy, ..
+            } => {
+                // Get actual row count from graph
+                let row_count = self.get_entity_row_count(table);
+
+                // Calculate IO cost based on scan strategy
+                let io_cost = match strategy {
+                    TableScanStrategy::FullScan => row_count as f64,
+                    TableScanStrategy::IndexScan { .. } => (row_count as f64) * 0.1, // 10% of rows
+                };
+
+                CostEstimate {
+                    rows_out: row_count,
+                    cpu_cost: row_count as f64, // CPU cost for scanning each row
+                    io_cost,
+                    memory_cost: 0.0, // Table scan doesn't use memory
+                }
+            }
+            _ => {
+                // For other plan types, use simple fallback for now
+                CostEstimate {
+                    rows_out: 1000,
+                    cpu_cost: 1000.0,
+                    io_cost: 1000.0,
+                    memory_cost: 0.0,
+                }
+            }
+        }
+    }
+
+    /// Get row count for an entity from the graph.
+    ///
+    /// Returns actual row count if available, otherwise fallback to 1 million.
+    fn get_entity_row_count(&self, entity_name: &str) -> usize {
+        use crate::semantic::graph::GraphNode;
+
+        if let Some(idx) = self.graph.entity_index(entity_name) {
+            if let Some(GraphNode::Entity(entity)) = self.graph.graph().node_weight(idx) {
+                return entity.row_count.unwrap_or(1_000_000);
+            }
+        }
+
+        // Fallback for unknown entities
+        1_000_000
     }
 
     pub fn select_best(&self, candidates: Vec<PhysicalPlan>) -> PlanResult<PhysicalPlan> {
