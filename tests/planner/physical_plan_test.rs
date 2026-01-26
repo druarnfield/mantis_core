@@ -109,7 +109,8 @@ fn test_physical_converter_supports_optimizer_strategy_selection() {
 
     assert!(
         physical_plans.is_ok(),
-        "Should successfully generate physical plans with DP strategy"
+        "Should successfully generate physical plans with DP strategy: {:?}",
+        physical_plans.as_ref().err()
     );
     let plans = physical_plans.unwrap();
     assert!(!plans.is_empty(), "Should generate at least one plan");
