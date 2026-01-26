@@ -1,5 +1,5 @@
 // src/model/measure.rs
-use crate::model::table::SqlExpr;
+use crate::model::expr::Expr;
 use crate::model::types::NullHandling;
 use std::collections::HashMap;
 
@@ -10,14 +10,14 @@ pub struct MeasureBlock {
     pub measures: HashMap<String, Measure>,
 }
 
-/// A measure definition with @atom syntax preserved.
+/// A measure definition.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Measure {
     pub name: String,
-    /// SQL expression with @atom references preserved
-    pub expr: SqlExpr,
+    /// SQL expression (parsed AST with @atom references)
+    pub expr: Expr,
     /// Optional filter condition
-    pub filter: Option<SqlExpr>,
+    pub filter: Option<Expr>,
     /// Optional NULL handling override
     pub null_handling: Option<NullHandling>,
 }

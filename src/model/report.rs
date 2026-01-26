@@ -1,5 +1,5 @@
 // src/model/report.rs
-use crate::model::table::SqlExpr;
+use crate::model::expr::Expr;
 
 /// A report definition.
 #[derive(Debug, Clone, PartialEq)]
@@ -16,7 +16,7 @@ pub struct Report {
     /// Measures to show (simple, with time suffix, or inline)
     pub show: Vec<ShowItem>,
     /// Filter conditions
-    pub filters: Vec<SqlExpr>,
+    pub filters: Vec<Expr>,
     /// Sort order
     pub sort: Vec<SortItem>,
     /// Row limit
@@ -49,7 +49,7 @@ pub enum ShowItem {
     /// Inline measure: net = { revenue - cost }
     InlineMeasure {
         name: String,
-        expr: SqlExpr,
+        expr: Expr,
         label: Option<String>,
     },
 }

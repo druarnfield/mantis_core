@@ -1,5 +1,5 @@
 // src/model/table.rs
-use crate::dsl::span::Span;
+use crate::model::expr::Expr;
 use crate::model::types::{AtomType, DataType, GrainLevel};
 use std::collections::HashMap;
 
@@ -51,15 +51,6 @@ pub enum Slicer {
     Calculated {
         name: String,
         data_type: DataType,
-        expr: SqlExpr,
+        expr: Expr,
     },
-}
-
-/// A SQL expression with span for error reporting.
-#[derive(Debug, Clone, PartialEq)]
-pub struct SqlExpr {
-    /// Raw SQL with @atom references preserved
-    pub sql: String,
-    /// Span for error reporting
-    pub span: Span,
 }

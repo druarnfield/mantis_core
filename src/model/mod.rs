@@ -18,7 +18,7 @@ pub use expr_parser::{parse_sql_expr, ParseError, ParseResult};
 pub use expr_validation::{ExprContext, ValidationError};
 pub use measure::{Measure, MeasureBlock};
 pub use report::{GroupItem, PeriodExpr, Report, ShowItem, SortDirection, SortItem, TimeSuffix};
-pub use table::{Atom, Slicer, SqlExpr, Table, TimeBinding};
+pub use table::{Atom, Slicer, Table, TimeBinding};
 pub use types::{AtomType, DataType, GrainLevel, Month, NullHandling, Weekday};
 
 // Re-export Cardinality from semantic graph for backward compatibility
