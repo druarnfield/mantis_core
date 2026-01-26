@@ -117,6 +117,72 @@ fn convert_unary_op(op: &sql::UnaryOperator, span: Span) -> ParseResult<UnaryOp>
     }
 }
 
+/// Convert sqlparser expression to our Expr type
+fn convert_expr(sql_expr: &sql::Expr, span: Span) -> ParseResult<Expr> {
+    match sql_expr {
+        // Simple identifier
+        sql::Expr::Identifier(ident) => {
+            // Check if this is an atom reference marker
+            if let Some(atom_name) = ident.value.strip_prefix("__ATOM__") {
+                Ok(Expr::AtomRef(atom_name.to_string()))
+            } else {
+                Ok(Expr::Column {
+                    entity: None,
+                    column: ident.value.clone(),
+                })
+            }
+        }
+
+        // Compound identifier (entity.column or schema.table.column)
+        sql::Expr::CompoundIdentifier(parts) => {
+            if parts.is_empty() {
+                return Err(ParseError::SqlParseError {
+                    message: "Empty compound identifier".to_string(),
+                    span,
+                });
+            }
+
+            // Check if first part is atom marker
+            if parts.len() == 1 {
+                if let Some(atom_name) = parts[0].value.strip_prefix("__ATOM__") {
+                    return Ok(Expr::AtomRef(atom_name.to_string()));
+                }
+                return Ok(Expr::Column {
+                    entity: None,
+                    column: parts[0].value.clone(),
+                });
+            }
+
+            // Two parts: entity.column
+            if parts.len() == 2 {
+                return Ok(Expr::Column {
+                    entity: Some(parts[0].value.clone()),
+                    column: parts[1].value.clone(),
+                });
+            }
+
+            // Three or more parts: use last two (schema.table.column → table.column)
+            let len = parts.len();
+            Ok(Expr::Column {
+                entity: Some(parts[len - 2].value.clone()),
+                column: parts[len - 1].value.clone(),
+            })
+        }
+
+        // Literals
+        sql::Expr::Value(val) => convert_literal(val, span),
+
+        // Nested expression (parentheses)
+        sql::Expr::Nested(inner) => convert_expr(inner, span),
+
+        // For now, return error for other types - we'll implement them in next tasks
+        unsupported => Err(ParseError::UnsupportedFeature {
+            feature: format!("Expression type: {:?}", unsupported),
+            span,
+        }),
+    }
+}
+
 /// Convert sqlparser literal to our Literal type
 fn convert_literal(val: &sql::Value, span: Span) -> ParseResult<Expr> {
     match val {
@@ -262,6 +328,45 @@ mod tests {
         assert_eq!(
             convert_unary_op(&sql::UnaryOperator::Minus, 0..1).unwrap(),
             UnaryOp::Neg
+        );
+    }
+
+    #[test]
+    fn test_convert_atom_ref() {
+        let ident = sql::Ident::new("__ATOM__revenue");
+        let expr = sql::Expr::Identifier(ident);
+
+        let result = convert_expr(&expr, 0..8).unwrap();
+        assert_eq!(result, Expr::AtomRef("revenue".to_string()));
+    }
+
+    #[test]
+    fn test_convert_regular_column() {
+        let ident = sql::Ident::new("customer_id");
+        let expr = sql::Expr::Identifier(ident);
+
+        let result = convert_expr(&expr, 0..11).unwrap();
+        assert_eq!(
+            result,
+            Expr::Column {
+                entity: None,
+                column: "customer_id".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn test_convert_qualified_column() {
+        let idents = vec![sql::Ident::new("sales"), sql::Ident::new("revenue")];
+        let expr = sql::Expr::CompoundIdentifier(idents);
+
+        let result = convert_expr(&expr, 0..13).unwrap();
+        assert_eq!(
+            result,
+            Expr::Column {
+                entity: Some("sales".to_string()),
+                column: "revenue".to_string(),
+            }
         );
     }
 }
