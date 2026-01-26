@@ -26,8 +26,9 @@ impl JoinGraph {
                 let t2 = &tables[j];
 
                 // Use UnifiedGraph.find_path() to get join info
+                // Only store DIRECT joins (single-hop paths)
                 if let Ok(path) = graph.find_path(t1, t2) {
-                    if !path.steps.is_empty() {
+                    if path.steps.len() == 1 {
                         let step = &path.steps[0];
 
                         // Parse cardinality from string
@@ -75,5 +76,35 @@ impl JoinGraph {
 
         let key2 = TablePair(t2.to_string(), t1.to_string());
         self.edges.get(&key2)
+    }
+
+    /// Check if two table sets can be joined.
+    /// Returns true if ANY table in s1 can join with ANY table in s2.
+    pub fn are_sets_joinable(&self, s1: &[String], s2: &[String]) -> bool {
+        for t1 in s1 {
+            for t2 in s2 {
+                if self.are_joinable(t1, t2) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Find a join edge between two table sets.
+    /// Returns the first valid join found.
+    pub fn get_join_edge_between_sets<'a>(
+        &'a self,
+        s1: &'a [String],
+        s2: &'a [String],
+    ) -> Option<(&'a str, &'a str, &'a JoinEdge)> {
+        for t1 in s1 {
+            for t2 in s2 {
+                if let Some(edge) = self.get_join_edge(t1, t2) {
+                    return Some((t1.as_str(), t2.as_str(), edge));
+                }
+            }
+        }
+        None
     }
 }
