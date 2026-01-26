@@ -175,6 +175,31 @@ fn convert_expr(sql_expr: &sql::Expr, span: Span) -> ParseResult<Expr> {
         // Nested expression (parentheses)
         sql::Expr::Nested(inner) => convert_expr(inner, span),
 
+        // Binary operations
+        sql::Expr::BinaryOp { left, op, right } => Ok(Expr::BinaryOp {
+            left: Box::new(convert_expr(left, span.clone())?),
+            op: convert_binary_op(op, span.clone())?,
+            right: Box::new(convert_expr(right, span)?),
+        }),
+
+        // Unary operations
+        sql::Expr::UnaryOp { op, expr } => Ok(Expr::UnaryOp {
+            op: convert_unary_op(op, span.clone())?,
+            expr: Box::new(convert_expr(expr, span)?),
+        }),
+
+        // IS NULL
+        sql::Expr::IsNull(expr) => Ok(Expr::UnaryOp {
+            op: UnaryOp::IsNull,
+            expr: Box::new(convert_expr(expr, span)?),
+        }),
+
+        // IS NOT NULL
+        sql::Expr::IsNotNull(expr) => Ok(Expr::UnaryOp {
+            op: UnaryOp::IsNotNull,
+            expr: Box::new(convert_expr(expr, span)?),
+        }),
+
         // For now, return error for other types - we'll implement them in next tasks
         unsupported => Err(ParseError::UnsupportedFeature {
             feature: format!("Expression type: {:?}", unsupported),
@@ -368,5 +393,52 @@ mod tests {
                 column: "revenue".to_string(),
             }
         );
+    }
+
+    #[test]
+    fn test_convert_binary_op_expr() {
+        // @revenue * @quantity
+        let left = sql::Expr::Identifier(sql::Ident::new("__ATOM__revenue"));
+        let right = sql::Expr::Identifier(sql::Ident::new("__ATOM__quantity"));
+        let expr = sql::Expr::BinaryOp {
+            left: Box::new(left),
+            op: sql::BinaryOperator::Multiply,
+            right: Box::new(right),
+        };
+
+        let result = convert_expr(&expr, 0..21).unwrap();
+        match result {
+            Expr::BinaryOp { left, op, right } => {
+                assert_eq!(*left, Expr::AtomRef("revenue".to_string()));
+                assert_eq!(op, BinaryOp::Mul);
+                assert_eq!(*right, Expr::AtomRef("quantity".to_string()));
+            }
+            _ => panic!("Expected BinaryOp"),
+        }
+    }
+
+    #[test]
+    fn test_convert_unary_op_expr() {
+        // NOT active
+        let inner = sql::Expr::Identifier(sql::Ident::new("active"));
+        let expr = sql::Expr::UnaryOp {
+            op: sql::UnaryOperator::Not,
+            expr: Box::new(inner),
+        };
+
+        let result = convert_expr(&expr, 0..10).unwrap();
+        match result {
+            Expr::UnaryOp { op, expr } => {
+                assert_eq!(op, UnaryOp::Not);
+                assert_eq!(
+                    *expr,
+                    Expr::Column {
+                        entity: None,
+                        column: "active".to_string(),
+                    }
+                );
+            }
+            _ => panic!("Expected UnaryOp"),
+        }
     }
 }
