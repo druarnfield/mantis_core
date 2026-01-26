@@ -64,6 +64,39 @@ fn preprocess_sql_for_parsing(sql: &str) -> String {
 
 // Helper functions will be added in subsequent tasks
 
+/// Convert sqlparser literal to our Literal type
+fn convert_literal(val: &sql::Value, span: Span) -> ParseResult<Expr> {
+    match val {
+        sql::Value::Number(n, _) => {
+            // Try to parse as int first, then float
+            if n.contains('.') || n.contains('e') || n.contains('E') {
+                let f = n.parse::<f64>().map_err(|e| ParseError::InvalidNumber {
+                    value: n.clone(),
+                    error: e.to_string(),
+                    span: span.clone(),
+                })?;
+                Ok(Expr::Literal(Literal::Float(f)))
+            } else {
+                let i = n.parse::<i64>().map_err(|e| ParseError::InvalidNumber {
+                    value: n.clone(),
+                    error: e.to_string(),
+                    span: span.clone(),
+                })?;
+                Ok(Expr::Literal(Literal::Int(i)))
+            }
+        }
+        sql::Value::SingleQuotedString(s) | sql::Value::DoubleQuotedString(s) => {
+            Ok(Expr::Literal(Literal::String(s.clone())))
+        }
+        sql::Value::Boolean(b) => Ok(Expr::Literal(Literal::Bool(*b))),
+        sql::Value::Null => Ok(Expr::Literal(Literal::Null)),
+        unsupported => Err(ParseError::UnsupportedFeature {
+            feature: format!("Literal value: {:?}", unsupported),
+            span,
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -90,5 +123,40 @@ mod tests {
     #[test]
     fn test_module_loads() {
         // Just verify the module compiles
+    }
+
+    #[test]
+    fn test_convert_literal_int() {
+        let sql_lit = sql::Value::Number("42".to_string(), false);
+        let result = convert_literal(&sql_lit, 0..2).unwrap();
+        assert_eq!(result, Expr::Literal(Literal::Int(42)));
+    }
+
+    #[test]
+    fn test_convert_literal_float() {
+        let sql_lit = sql::Value::Number("3.14".to_string(), false);
+        let result = convert_literal(&sql_lit, 0..4).unwrap();
+        assert_eq!(result, Expr::Literal(Literal::Float(3.14)));
+    }
+
+    #[test]
+    fn test_convert_literal_string() {
+        let sql_lit = sql::Value::SingleQuotedString("hello".to_string());
+        let result = convert_literal(&sql_lit, 0..7).unwrap();
+        assert_eq!(result, Expr::Literal(Literal::String("hello".to_string())));
+    }
+
+    #[test]
+    fn test_convert_literal_bool() {
+        let sql_lit = sql::Value::Boolean(true);
+        let result = convert_literal(&sql_lit, 0..4).unwrap();
+        assert_eq!(result, Expr::Literal(Literal::Bool(true)));
+    }
+
+    #[test]
+    fn test_convert_literal_null() {
+        let sql_lit = sql::Value::Null;
+        let result = convert_literal(&sql_lit, 0..4).unwrap();
+        assert_eq!(result, Expr::Literal(Literal::Null));
     }
 }
