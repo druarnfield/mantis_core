@@ -1532,7 +1532,7 @@ mod tests {
     #[test]
     fn test_column_with_default() {
         let table = CreateTable::new("users").column(
-            ColumnDef::new("status", DataType::Varchar(20)).default(crate::expr::lit_str("active")),
+            ColumnDef::new("status", DataType::Varchar(20)).default(crate::sql::expr::lit_str("active")),
         );
 
         let sql = table.to_sql(Dialect::Postgres);
