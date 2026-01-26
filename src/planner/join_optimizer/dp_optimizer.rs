@@ -155,6 +155,182 @@ impl<'a> DPOptimizer<'a> {
         }
     }
 
+    /// Main DP optimization entry point.
+    /// Returns the optimal join plan for the given tables and filters.
+    pub fn optimize(&mut self, tables: Vec<String>, filters: Vec<Expr>) -> Option<LogicalPlan> {
+        // 1. Build join graph from UnifiedGraph
+        self.join_graph = Some(JoinGraph::build(self.graph, &tables));
+
+        // 2. Classify filters by table dependencies
+        self.filters = self.classify_filters(filters);
+
+        // 3. Base case: single-table plans with applicable filters
+        for table in &tables {
+            let plan = self.build_base_plan(table);
+            self.memo.insert(TableSet::single(table), plan);
+        }
+
+        // 4. DP: build optimal plans for increasing subset sizes
+        for size in 2..=tables.len() {
+            let subsets = generate_subsets(&tables, size);
+            for subset in subsets {
+                self.find_best_plan_for_subset(&subset);
+            }
+        }
+
+        // 5. Return optimal plan for all tables
+        let all_tables = TableSet::from_vec(tables);
+        self.memo.get(&all_tables).map(|p| p.plan.clone())
+    }
+
+    /// Find the best join plan for a subset by trying all partitions.
+    fn find_best_plan_for_subset(&mut self, subset: &TableSet) {
+        let mut best_plan: Option<SubsetPlan> = None;
+        let mut best_cost = f64::MAX;
+
+        // Try all ways to partition subset into two joinable parts
+        for (s1, s2) in enumerate_splits(subset) {
+            // Skip if tables can't be joined
+            let join_graph = self.join_graph.as_ref().unwrap();
+            if !join_graph.are_sets_joinable(&s1.to_vec(), &s2.to_vec()) {
+                continue;
+            }
+
+            // Get subplans from memo
+            let left = match self.memo.get(&s1) {
+                Some(plan) => plan,
+                None => continue,
+            };
+            let right = match self.memo.get(&s2) {
+                Some(plan) => plan,
+                None => continue,
+            };
+
+            // Try both join orders: left ⋈ right and right ⋈ left
+            for (l, r) in [(left, right), (right, left)] {
+                let candidate = self.build_join_plan(l, r, subset);
+                let cost = candidate.cost.total();
+
+                if cost < best_cost {
+                    best_cost = cost;
+                    best_plan = Some(candidate);
+                }
+            }
+        }
+
+        if let Some(plan) = best_plan {
+            self.memo.insert(subset.clone(), plan);
+        }
+    }
+
+    /// Build a join plan between two subplans with cardinality estimation.
+    fn build_join_plan(
+        &self,
+        left: &SubsetPlan,
+        right: &SubsetPlan,
+        _subset: &TableSet,
+    ) -> SubsetPlan {
+        use crate::planner::logical::{JoinCondition, JoinNode, JoinType};
+        use crate::semantic::graph::query::ColumnRef;
+
+        let join_graph = self.join_graph.as_ref().unwrap();
+
+        // Get join edge between left and right table sets
+        let left_tables = self.extract_tables_from_plan(&left.plan);
+        let right_tables = self.extract_tables_from_plan(&right.plan);
+
+        let (t1, t2, join_edge) = join_graph
+            .get_join_edge_between_sets(&left_tables, &right_tables)
+            .expect("Tables should be joinable");
+
+        // Estimate output cardinality
+        let estimated_rows = self.cardinality_estimator.estimate_join_output(
+            left.estimated_rows,
+            right.estimated_rows,
+            join_edge,
+        );
+
+        // Build join condition from join_columns
+        let join_pairs: Vec<(ColumnRef, ColumnRef)> = join_edge
+            .join_columns
+            .iter()
+            .map(|(left_col, right_col)| {
+                (
+                    ColumnRef {
+                        entity: t1.to_string(),
+                        column: left_col.clone(),
+                    },
+                    ColumnRef {
+                        entity: t2.to_string(),
+                        column: right_col.clone(),
+                    },
+                )
+            })
+            .collect();
+
+        // Build join plan
+        let plan = LogicalPlan::Join(JoinNode {
+            left: Box::new(left.plan.clone()),
+            right: Box::new(right.plan.clone()),
+            on: JoinCondition::Equi(join_pairs),
+            join_type: JoinType::Inner,
+            cardinality: Some(join_edge.cardinality),
+        });
+
+        // Estimate cost: left cost + right cost + join cost
+        let join_cost = estimated_rows as f64;
+        let cost = CostEstimate {
+            rows_out: estimated_rows,
+            cpu_cost: left.cost.cpu_cost + right.cost.cpu_cost + join_cost,
+            io_cost: left.cost.io_cost + right.cost.io_cost + (join_cost * 0.1),
+            memory_cost: left
+                .cost
+                .memory_cost
+                .max(right.cost.memory_cost)
+                .max(estimated_rows as f64),
+        };
+
+        SubsetPlan {
+            plan,
+            estimated_rows,
+            cost,
+        }
+    }
+
+    /// Extract table names from a logical plan.
+    fn extract_tables_from_plan(&self, plan: &LogicalPlan) -> Vec<String> {
+        let mut tables = Vec::new();
+        self.collect_tables_from_plan(plan, &mut tables);
+        tables
+    }
+
+    /// Recursively collect table names from a plan.
+    fn collect_tables_from_plan(&self, plan: &LogicalPlan, tables: &mut Vec<String>) {
+        match plan {
+            LogicalPlan::Scan(scan) => {
+                tables.push(scan.entity.clone());
+            }
+            LogicalPlan::Join(join) => {
+                self.collect_tables_from_plan(&join.left, tables);
+                self.collect_tables_from_plan(&join.right, tables);
+            }
+            LogicalPlan::Filter(filter) => {
+                self.collect_tables_from_plan(&filter.input, tables);
+            }
+            _ => {}
+        }
+    }
+
+    /// Helper for tests: check if memo contains a single table.
+    pub fn memo_contains(&self, table: &str) -> bool {
+        self.memo.contains_key(&TableSet::single(table))
+    }
+
+    /// Helper for tests: check if memo contains a table set.
+    pub fn memo_contains_set(&self, table_set: &TableSet) -> bool {
+        self.memo.contains_key(table_set)
+    }
+
     pub fn classify_filters(&mut self, filters: Vec<Expr>) -> Vec<ClassifiedFilter> {
         filters
             .into_iter()

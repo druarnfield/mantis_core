@@ -208,3 +208,72 @@ fn test_build_base_plan_with_filter() {
     // Estimated rows reduced by selectivity: 1000 * 0.33 ≈ 330
     assert!(plan.estimated_rows >= 300 && plan.estimated_rows <= 350);
 }
+
+// ============================================================================
+// DP MAIN ALGORITHM INTEGRATION TESTS (Task 13)
+// ============================================================================
+
+use mantis::semantic::graph::{Cardinality, JoinsToEdge, RelationshipSource};
+
+#[test]
+fn test_two_table_dp_optimal() {
+    let mut graph = UnifiedGraph::new();
+
+    // Setup: orders (10K) -> customers (100)
+    let orders_idx = graph.add_test_entity(EntityNode {
+        name: "orders".to_string(),
+        entity_type: EntityType::Fact,
+        physical_name: None,
+        schema: None,
+        row_count: Some(10000),
+        size_category: SizeCategory::Large,
+        metadata: HashMap::new(),
+    });
+
+    let customers_idx = graph.add_test_entity(EntityNode {
+        name: "customers".to_string(),
+        entity_type: EntityType::Dimension,
+        physical_name: None,
+        schema: None,
+        row_count: Some(100),
+        size_category: SizeCategory::Small,
+        metadata: HashMap::new(),
+    });
+
+    // Add relationship: orders.customer_id -> customers.id (N:1)
+    graph.add_test_join(
+        orders_idx,
+        customers_idx,
+        JoinsToEdge {
+            from_entity: "orders".to_string(),
+            to_entity: "customers".to_string(),
+            join_columns: vec![("customer_id".to_string(), "id".to_string())],
+            cardinality: Cardinality::ManyToOne,
+            source: RelationshipSource::ForeignKey,
+        },
+    );
+
+    let mut dp = DPOptimizer::new(&graph);
+
+    let tables = vec!["orders".to_string(), "customers".to_string()];
+    let filters = vec![];
+
+    let optimized = dp.optimize(tables.clone(), filters);
+
+    // Should return a join plan
+    assert!(
+        optimized.is_some(),
+        "Expected optimization to return a plan"
+    );
+
+    // Should have both tables in memo
+    assert!(dp.memo_contains("orders"), "Expected orders in memo");
+    assert!(dp.memo_contains("customers"), "Expected customers in memo");
+
+    // Should have final plan for both tables
+    let all_tables = TableSet::from_vec(vec!["orders".to_string(), "customers".to_string()]);
+    assert!(
+        dp.memo_contains_set(&all_tables),
+        "Expected final plan in memo"
+    );
+}
