@@ -1,8 +1,9 @@
 // tests/planner/dp_optimizer_test.rs
 use mantis::model::expr::{BinaryOp, Expr};
 use mantis::planner::join_optimizer::dp_optimizer::*;
-use mantis::semantic::graph::UnifiedGraph;
-use std::collections::BTreeSet;
+use mantis::planner::logical::LogicalPlan;
+use mantis::semantic::graph::{EntityNode, EntityType, SizeCategory, UnifiedGraph};
+use std::collections::{BTreeSet, HashMap};
 
 #[test]
 fn test_table_set_creation() {
@@ -133,4 +134,77 @@ fn test_classify_join_filter() {
     assert_eq!(classified[0].referenced_tables.len(), 2);
     assert!(classified[0].referenced_tables.contains("orders"));
     assert!(classified[0].referenced_tables.contains("customers"));
+}
+
+#[test]
+fn test_build_base_plan_no_filters() {
+    let mut graph = UnifiedGraph::new();
+    graph.add_test_entity(EntityNode {
+        name: "orders".to_string(),
+        entity_type: EntityType::Fact,
+        physical_name: None,
+        schema: None,
+        row_count: Some(1000),
+        size_category: SizeCategory::Medium,
+        metadata: HashMap::new(),
+    });
+
+    let mut dp = DPOptimizer::new(&graph);
+    dp.filters = vec![];
+
+    let plan = dp.build_base_plan("orders");
+
+    // Should be a simple scan
+    match &plan.plan {
+        LogicalPlan::Scan(scan) => {
+            assert_eq!(scan.entity, "orders");
+        }
+        _ => panic!("Expected Scan node"),
+    }
+
+    assert_eq!(plan.estimated_rows, 1000);
+}
+
+#[test]
+fn test_build_base_plan_with_filter() {
+    let mut graph = UnifiedGraph::new();
+    graph.add_test_entity(EntityNode {
+        name: "orders".to_string(),
+        entity_type: EntityType::Fact,
+        physical_name: None,
+        schema: None,
+        row_count: Some(1000),
+        size_category: SizeCategory::Medium,
+        metadata: HashMap::new(),
+    });
+
+    let mut dp = DPOptimizer::new(&graph);
+
+    // WHERE orders.amount > 1000 (selectivity 0.33)
+    let filter = Expr::binary(
+        Expr::qualified_column("orders", "amount"),
+        BinaryOp::Gt,
+        Expr::int(1000),
+    );
+
+    dp.filters = dp.classify_filters(vec![filter]);
+
+    let plan = dp.build_base_plan("orders");
+
+    // Should be Scan wrapped in Filter
+    match &plan.plan {
+        LogicalPlan::Filter(filter_node) => {
+            assert_eq!(filter_node.predicates.len(), 1);
+            match &*filter_node.input {
+                LogicalPlan::Scan(scan) => {
+                    assert_eq!(scan.entity, "orders");
+                }
+                _ => panic!("Expected Scan inside Filter"),
+            }
+        }
+        _ => panic!("Expected Filter node"),
+    }
+
+    // Estimated rows reduced by selectivity: 1000 * 0.33 ≈ 330
+    assert!(plan.estimated_rows >= 300 && plan.estimated_rows <= 350);
 }

@@ -3,7 +3,7 @@ use crate::model::expr::Expr;
 use crate::planner::cost::CostEstimate;
 use crate::planner::join_optimizer::cardinality::CardinalityEstimator;
 use crate::planner::join_optimizer::join_graph::JoinGraph;
-use crate::planner::logical::LogicalPlan;
+use crate::planner::logical::{FilterNode, LogicalPlan, ScanNode};
 use crate::semantic::graph::UnifiedGraph;
 use std::collections::{BTreeSet, HashMap, HashSet};
 
@@ -136,13 +136,10 @@ pub struct ClassifiedFilter {
     pub selectivity: f64,
 }
 
-struct SubsetPlan {
-    #[allow(dead_code)]
-    plan: LogicalPlan,
-    #[allow(dead_code)]
-    estimated_rows: usize,
-    #[allow(dead_code)]
-    cost: CostEstimate,
+pub struct SubsetPlan {
+    pub plan: LogicalPlan,
+    pub estimated_rows: usize,
+    pub cost: CostEstimate,
 }
 
 impl<'a> DPOptimizer<'a> {
@@ -215,6 +212,64 @@ impl<'a> DPOptimizer<'a> {
                 }
             }
             _ => {}
+        }
+    }
+
+    pub fn build_base_plan(&self, table: &str) -> SubsetPlan {
+        let mut plan = LogicalPlan::Scan(ScanNode {
+            entity: table.to_string(),
+        });
+
+        // Get table row count from graph
+        let mut estimated_rows = self
+            .graph
+            .entity_index(table)
+            .and_then(|idx| {
+                if let Some(node) = self.graph.graph().node_weight(idx) {
+                    match node {
+                        crate::semantic::graph::GraphNode::Entity(entity) => entity.row_count,
+                        _ => None,
+                    }
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(1000); // Default
+
+        // Find filters that ONLY reference this table
+        let applicable_filters: Vec<_> = self
+            .filters
+            .iter()
+            .filter(|f| f.referenced_tables.len() == 1 && f.referenced_tables.contains(table))
+            .collect();
+
+        // Apply filters and reduce cardinality
+        if !applicable_filters.is_empty() {
+            let predicates: Vec<_> = applicable_filters.iter().map(|f| f.expr.clone()).collect();
+
+            plan = LogicalPlan::Filter(FilterNode {
+                input: Box::new(plan),
+                predicates,
+            });
+
+            // Reduce estimated rows by filter selectivity
+            for filter in &applicable_filters {
+                estimated_rows = (estimated_rows as f64 * filter.selectivity) as usize;
+            }
+        }
+
+        // Estimate cost (simple for now - just row count)
+        let cost = CostEstimate {
+            rows_out: estimated_rows,
+            cpu_cost: estimated_rows as f64,
+            io_cost: estimated_rows as f64,
+            memory_cost: 0.0,
+        };
+
+        SubsetPlan {
+            plan,
+            estimated_rows,
+            cost,
         }
     }
 }
