@@ -175,3 +175,114 @@ fn test_are_table_sets_joinable() {
     let s2 = vec!["C".to_string()];
     assert!(join_graph.are_sets_joinable(&s1, &s2));
 }
+
+#[test]
+fn test_join_columns_are_extracted_from_graph() {
+    let mut graph = UnifiedGraph::new();
+
+    // Add entities
+    let orders = EntityNode {
+        name: "orders".to_string(),
+        entity_type: EntityType::Fact,
+        physical_name: None,
+        schema: None,
+        row_count: Some(1000),
+        size_category: SizeCategory::Medium,
+        metadata: Default::default(),
+    };
+    let orders_idx = graph.add_test_entity(orders);
+
+    let customers = EntityNode {
+        name: "customers".to_string(),
+        entity_type: EntityType::Dimension,
+        physical_name: None,
+        schema: None,
+        row_count: Some(100),
+        size_category: SizeCategory::Small,
+        metadata: Default::default(),
+    };
+    let customers_idx = graph.add_test_entity(customers);
+
+    // Add relationship with join columns
+    let join_edge = JoinsToEdge {
+        from_entity: "orders".to_string(),
+        to_entity: "customers".to_string(),
+        join_columns: vec![("customer_id".to_string(), "id".to_string())],
+        cardinality: Cardinality::ManyToOne,
+        source: RelationshipSource::ForeignKey,
+    };
+    graph.add_test_join(orders_idx, customers_idx, join_edge);
+
+    let tables = vec!["orders".to_string(), "customers".to_string()];
+    let join_graph = JoinGraph::build(&graph, &tables);
+
+    // Verify join columns are populated
+    let edge = join_graph.get_join_edge("orders", "customers");
+    assert!(edge.is_some());
+
+    let edge = edge.unwrap();
+    assert_eq!(edge.join_columns.len(), 1);
+    assert_eq!(
+        edge.join_columns[0],
+        ("customer_id".to_string(), "id".to_string())
+    );
+}
+
+#[test]
+fn test_join_columns_with_multiple_columns() {
+    let mut graph = UnifiedGraph::new();
+
+    // Add entities
+    let orders = EntityNode {
+        name: "orders".to_string(),
+        entity_type: EntityType::Fact,
+        physical_name: None,
+        schema: None,
+        row_count: Some(1000),
+        size_category: SizeCategory::Medium,
+        metadata: Default::default(),
+    };
+    let orders_idx = graph.add_test_entity(orders);
+
+    let customers = EntityNode {
+        name: "customers".to_string(),
+        entity_type: EntityType::Dimension,
+        physical_name: None,
+        schema: None,
+        row_count: Some(100),
+        size_category: SizeCategory::Small,
+        metadata: Default::default(),
+    };
+    let customers_idx = graph.add_test_entity(customers);
+
+    // Add relationship with multiple join columns (composite key)
+    let join_edge = JoinsToEdge {
+        from_entity: "orders".to_string(),
+        to_entity: "customers".to_string(),
+        join_columns: vec![
+            ("customer_id".to_string(), "id".to_string()),
+            ("region".to_string(), "region".to_string()),
+        ],
+        cardinality: Cardinality::ManyToOne,
+        source: RelationshipSource::ForeignKey,
+    };
+    graph.add_test_join(orders_idx, customers_idx, join_edge);
+
+    let tables = vec!["orders".to_string(), "customers".to_string()];
+    let join_graph = JoinGraph::build(&graph, &tables);
+
+    // Verify all join columns are extracted
+    let edge = join_graph.get_join_edge("orders", "customers");
+    assert!(edge.is_some());
+
+    let edge = edge.unwrap();
+    assert_eq!(edge.join_columns.len(), 2);
+    assert_eq!(
+        edge.join_columns[0],
+        ("customer_id".to_string(), "id".to_string())
+    );
+    assert_eq!(
+        edge.join_columns[1],
+        ("region".to_string(), "region".to_string())
+    );
+}

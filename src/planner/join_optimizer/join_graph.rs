@@ -25,27 +25,25 @@ impl JoinGraph {
                 let t1 = &tables[i];
                 let t2 = &tables[j];
 
-                // Use UnifiedGraph.find_path() to get join info
-                // Only store DIRECT joins (single-hop paths)
-                if let Ok(path) = graph.find_path(t1, t2) {
-                    if path.steps.len() == 1 {
-                        let step = &path.steps[0];
+                // Look up entity nodes
+                let t1_idx = graph.entity_index(t1);
+                let t2_idx = graph.entity_index(t2);
 
-                        // Parse cardinality from string
-                        let cardinality = match step.cardinality.as_str() {
-                            "1:1" => Cardinality::OneToOne,
-                            "1:N" => Cardinality::OneToMany,
-                            "N:1" => Cardinality::ManyToOne,
-                            "N:N" => Cardinality::ManyToMany,
-                            _ => Cardinality::ManyToMany,
-                        };
+                if let (Some(t1_idx), Some(t2_idx)) = (t1_idx, t2_idx) {
+                    // Check for direct edge between the two entities
+                    if let Some(edge_idx) = graph.graph().find_edge(t1_idx, t2_idx) {
+                        if let Some(edge_data) = graph.graph().edge_weight(edge_idx) {
+                            // Extract join columns and cardinality from JoinsToEdge
+                            if let crate::semantic::graph::GraphEdge::JoinsTo(joins_to) = edge_data
+                            {
+                                let edge = JoinEdge {
+                                    cardinality: joins_to.cardinality,
+                                    join_columns: joins_to.join_columns.clone(),
+                                };
 
-                        let edge = JoinEdge {
-                            cardinality,
-                            join_columns: vec![], // Will be populated from graph edge data
-                        };
-
-                        edges.insert(TablePair(t1.clone(), t2.clone()), edge);
+                                edges.insert(TablePair(t1.clone(), t2.clone()), edge);
+                            }
+                        }
                     }
                 }
             }
