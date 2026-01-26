@@ -1,15 +1,15 @@
 //! Build logical plans from reports.
 
 use crate::model::{Report, ShowItem};
+use crate::planner::join_builder::JoinBuilder;
 use crate::planner::logical::{
-    AggregateNode, ColumnRef, LogicalPlan, MeasureRef, OrderRef, ProjectNode, ProjectionItem,
-    ScanNode, SortNode,
+    AggregateNode, ColumnRef, FilterNode, LogicalPlan, MeasureRef, OrderRef, ProjectNode,
+    ProjectionItem, ScanNode, SortNode,
 };
 use crate::planner::{PlanError, PlanResult};
 use crate::semantic::graph::UnifiedGraph;
 
 pub struct PlanBuilder<'a> {
-    #[allow(dead_code)]
     graph: &'a UnifiedGraph,
 }
 
@@ -19,8 +19,13 @@ impl<'a> PlanBuilder<'a> {
     }
 
     pub fn build(&self, report: &Report) -> PlanResult<LogicalPlan> {
-        // Start with base scan
+        // Start with base scan (or joins for multi-table)
         let mut plan = self.build_scan(report)?;
+
+        // Add filters (WHERE clause)
+        if !report.filters.is_empty() {
+            plan = self.build_filter(plan, report)?;
+        }
 
         // Add aggregation if needed
         plan = self.build_aggregate(plan, report)?;
@@ -45,14 +50,28 @@ impl<'a> PlanBuilder<'a> {
     }
 
     fn build_scan(&self, report: &Report) -> PlanResult<LogicalPlan> {
-        // For now, just use first from table
-        let entity = report
-            .from
-            .first()
-            .ok_or_else(|| PlanError::LogicalPlanError("Report has no FROM table".to_string()))?;
+        if report.from.is_empty() {
+            return Err(PlanError::LogicalPlanError(
+                "Report has no FROM table".to_string(),
+            ));
+        }
 
-        Ok(LogicalPlan::Scan(ScanNode {
-            entity: entity.clone(),
+        // Use JoinBuilder for multi-table queries
+        if report.from.len() > 1 {
+            let join_builder = JoinBuilder::new(self.graph);
+            join_builder.build_join_tree(&report.from)
+        } else {
+            // Single table - simple scan
+            Ok(LogicalPlan::Scan(ScanNode {
+                entity: report.from[0].clone(),
+            }))
+        }
+    }
+
+    fn build_filter(&self, input: LogicalPlan, report: &Report) -> PlanResult<LogicalPlan> {
+        Ok(LogicalPlan::Filter(FilterNode {
+            input: Box::new(input),
+            predicates: report.filters.clone(),
         }))
     }
 
