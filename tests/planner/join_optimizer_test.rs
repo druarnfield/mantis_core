@@ -4,7 +4,7 @@ use mantis::model::expr::{BinaryOp, Expr, Literal};
 use mantis::planner::logical::{
     FilterNode, JoinCondition, JoinNode, JoinType, LogicalPlan, ScanNode,
 };
-use mantis::planner::physical::join_optimizer::JoinOrderOptimizer;
+use mantis::planner::physical::join_optimizer::{JoinOrderOptimizer, OptimizerStrategy};
 use mantis::semantic::graph::{
     query::ColumnRef, Cardinality, EntityNode, EntityType, JoinsToEdge, RelationshipSource,
     SizeCategory, UnifiedGraph,
@@ -288,7 +288,7 @@ fn create_large_test_graph() -> UnifiedGraph {
 
     // Create a star schema: fact table in center, 4 dimensions around it
     // This is a realistic pattern for data warehouses
-    
+
     // Fact table (large)
     let sales = EntityNode {
         name: "sales".to_string(),
@@ -347,14 +347,14 @@ fn test_greedy_join_order_for_large_query() {
 
     // Create a logical plan with all 5 tables
     let tables = vec!["sales", "products", "customers", "stores", "dates"];
-    
+
     let result = optimizer.greedy_join_order(&tables);
 
     // Should return a valid plan
     assert!(result.is_some(), "Greedy should return a valid join plan");
-    
+
     let plan = result.unwrap();
-    
+
     // Verify all tables are included
     let extracted_tables = optimizer.extract_tables(&plan);
     assert_eq!(extracted_tables.len(), 5, "Should include all 5 tables");
@@ -415,11 +415,81 @@ fn test_find_best_next_join() {
         "dates".to_string(),
     ];
 
-    let next_table = optimizer.find_best_next_join(&current_plan, &remaining).unwrap();
+    let next_table = optimizer
+        .find_best_next_join(&current_plan, &remaining)
+        .unwrap();
 
     // Should return one of the remaining tables
     assert!(
         remaining.contains(&next_table),
         "Next table should be from remaining tables"
     );
+}
+
+// ============================================================================
+// Task 14: Optimizer Strategy Selection (Adaptive/DP/Legacy)
+// ============================================================================
+
+#[test]
+fn test_strategy_selection_small_query() {
+    let graph = UnifiedGraph::new();
+    let optimizer = JoinOrderOptimizer::new(&graph);
+
+    // 3 tables - should use DP
+    let tables = vec!["A".to_string(), "B".to_string(), "C".to_string()];
+
+    let strategy = optimizer.select_strategy(&tables);
+
+    match strategy {
+        OptimizerStrategy::DP => {} // Expected
+        _ => panic!("Expected DP for 3 tables"),
+    }
+}
+
+#[test]
+fn test_strategy_selection_large_query() {
+    let graph = UnifiedGraph::new();
+    let optimizer = JoinOrderOptimizer::new(&graph);
+
+    // 11 tables - should fall back to greedy
+    let tables: Vec<_> = (0..11).map(|i| format!("T{}", i)).collect();
+
+    let strategy = optimizer.select_strategy(&tables);
+
+    match strategy {
+        OptimizerStrategy::Legacy => {} // Expected
+        _ => panic!("Expected Legacy for 11 tables"),
+    }
+}
+
+#[test]
+fn test_strategy_selection_boundary_10_tables() {
+    let graph = UnifiedGraph::new();
+    let optimizer = JoinOrderOptimizer::new(&graph);
+
+    // 10 tables - should still use DP (≤10)
+    let tables: Vec<_> = (0..10).map(|i| format!("T{}", i)).collect();
+
+    let strategy = optimizer.select_strategy(&tables);
+
+    match strategy {
+        OptimizerStrategy::DP => {} // Expected
+        _ => panic!("Expected DP for 10 tables (boundary)"),
+    }
+}
+
+#[test]
+fn test_can_create_optimizer_with_explicit_strategy() {
+    let graph = UnifiedGraph::new();
+    let optimizer = JoinOrderOptimizer::with_strategy(&graph, OptimizerStrategy::DP);
+
+    let tables = vec!["A".to_string(), "B".to_string()];
+
+    // Should use DP regardless of table count
+    let strategy = optimizer.select_strategy(&tables);
+
+    match strategy {
+        OptimizerStrategy::DP => {} // Expected
+        _ => panic!("Expected DP when explicitly set"),
+    }
 }

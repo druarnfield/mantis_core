@@ -6,9 +6,21 @@ use crate::planner::physical::PhysicalPlan;
 use crate::semantic::graph::{Cardinality, UnifiedGraph};
 use std::collections::HashSet;
 
+/// Strategy for join order optimization.
+#[derive(Debug, Clone, PartialEq)]
+pub enum OptimizerStrategy {
+    /// Use legacy enumeration/greedy algorithm.
+    Legacy,
+    /// Use dynamic programming (Selinger algorithm).
+    DP,
+    /// Adaptively choose strategy based on table count (DP ≤10, Legacy >10).
+    Adaptive,
+}
+
 /// Join order optimizer that reorders joins for better performance.
 pub struct JoinOrderOptimizer<'a> {
     graph: &'a UnifiedGraph,
+    strategy: OptimizerStrategy,
 }
 
 /// Information needed to construct a join.
@@ -18,9 +30,37 @@ struct JoinInfo {
 }
 
 impl<'a> JoinOrderOptimizer<'a> {
-    /// Create a new join order optimizer.
+    /// Create a new join order optimizer with adaptive strategy.
     pub fn new(graph: &'a UnifiedGraph) -> Self {
-        Self { graph }
+        Self {
+            graph,
+            strategy: OptimizerStrategy::Adaptive,
+        }
+    }
+
+    /// Create a new join order optimizer with explicit strategy.
+    pub fn with_strategy(graph: &'a UnifiedGraph, strategy: OptimizerStrategy) -> Self {
+        Self { graph, strategy }
+    }
+
+    /// Select the actual strategy to use based on table count.
+    ///
+    /// For Adaptive mode:
+    /// - DP for ≤10 tables
+    /// - Legacy for >10 tables
+    ///
+    /// For explicit modes (DP/Legacy), returns that strategy directly.
+    pub fn select_strategy(&self, tables: &[String]) -> OptimizerStrategy {
+        match self.strategy {
+            OptimizerStrategy::Adaptive => {
+                if tables.len() <= 10 {
+                    OptimizerStrategy::DP
+                } else {
+                    OptimizerStrategy::Legacy
+                }
+            }
+            ref s => s.clone(),
+        }
     }
 
     /// Extract all table names from a logical plan.
