@@ -63,3 +63,40 @@ fn test_build_join_graph_from_unified_graph() {
     assert!(edge.is_some());
     assert_eq!(edge.unwrap().cardinality, Cardinality::ManyToOne);
 }
+
+#[test]
+fn test_disconnected_tables() {
+    let mut graph = UnifiedGraph::new();
+
+    let orders = EntityNode {
+        name: "orders".to_string(),
+        entity_type: EntityType::Fact,
+        physical_name: None,
+        schema: None,
+        row_count: Some(1000),
+        size_category: SizeCategory::Medium,
+        metadata: Default::default(),
+    };
+    graph.add_test_entity(orders);
+
+    let products = EntityNode {
+        name: "products".to_string(),
+        entity_type: EntityType::Dimension,
+        physical_name: None,
+        schema: None,
+        row_count: Some(500),
+        size_category: SizeCategory::Medium,
+        metadata: Default::default(),
+    };
+    graph.add_test_entity(products);
+    // No relationship between orders and products
+
+    let tables = vec!["orders".to_string(), "products".to_string()];
+    let join_graph = JoinGraph::build(&graph, &tables);
+
+    // Should NOT be joinable
+    assert!(!join_graph.are_joinable("orders", "products"));
+
+    // Should return None for edge
+    assert!(join_graph.get_join_edge("orders", "products").is_none());
+}
