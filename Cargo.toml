@@ -205,6 +205,10 @@ name = "cardinality_estimator_test"
 path = "tests/planner/cardinality_estimator_test.rs"
 
 [[test]]
+name = "dp_optimizer_test"
+path = "tests/planner/dp_optimizer_test.rs"
+
+[[test]]
 name = "optimizer_integration_test"
 path = "tests/planner/optimizer_integration_test.rs"
 
