@@ -56,9 +56,19 @@ impl<'a> JoinOrderOptimizer<'a> {
             .map(|perm| self.build_join_plan_for_order(&perm))
             .collect();
 
-        // Sort by cost (using cost estimator if available)
-        // For now, we just return all candidates
-        // TODO: Sort by cost once we have physical plan conversion
+        // Sort candidates by estimated cost (lowest first)
+        candidates.sort_by(|a, b| match (a, b) {
+            (Some(plan_a), Some(plan_b)) => {
+                let cost_a = self.estimate_logical_plan_cost(plan_a);
+                let cost_b = self.estimate_logical_plan_cost(plan_b);
+                cost_a
+                    .partial_cmp(&cost_b)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            }
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, None) => std::cmp::Ordering::Equal,
+        });
 
         candidates
     }
@@ -253,11 +263,26 @@ impl<'a> JoinOrderOptimizer<'a> {
             // Remove from remaining
             remaining.retain(|t| t != &next_table);
 
-            // Get a table from current plan to join with
-            let current_table = Self::get_leftmost_table(&current_plan)?;
-            let join_info = self.find_join_info(&current_table, &next_table)?;
+            // Find which table in current plan can join to next_table
+            let current_tables = self.extract_tables(&current_plan);
+            let joinable_table = current_tables.iter().find(|ct| {
+                self.find_join_info(ct, &next_table).is_some()
+                    || self.find_join_info(&next_table, ct).is_some()
+            })?;
+
+            // Get join info (try both directions)
+            let join_info = if let Some(info) = self.find_join_info(joinable_table, &next_table) {
+                info
+            } else if let Some(info) = self.find_join_info(&next_table, joinable_table) {
+                info
+            } else {
+                // No valid join path found
+                return None;
+            };
 
             // Add to plan
+            // Note: We're still using left-deep tree structure, joining new table to the right
+            // This works because the join condition already handles the correct table references
             current_plan = LogicalPlan::Join(JoinNode {
                 left: Box::new(current_plan),
                 right: Box::new(LogicalPlan::Scan(ScanNode { entity: next_table })),
@@ -419,6 +444,74 @@ impl<'a> JoinOrderOptimizer<'a> {
             }
             LogicalPlan::Limit(limit) => {
                 self.collect_tables(&limit.input, tables);
+            }
+        }
+    }
+
+    /// Estimate the cost of a logical plan.
+    ///
+    /// This is a simplified heuristic that works on LogicalPlan before physical conversion.
+    /// Uses table row counts from graph and join cardinality as cost proxies.
+    /// Lower cost = better plan.
+    fn estimate_logical_plan_cost(&self, plan: &LogicalPlan) -> f64 {
+        match plan {
+            LogicalPlan::Scan(scan) => {
+                // Base cost is the table size
+                if let Some(idx) = self.graph.entity_index(&scan.entity) {
+                    if let Some(crate::semantic::graph::GraphNode::Entity(entity)) =
+                        self.graph.graph().node_weight(idx)
+                    {
+                        return entity.row_count.unwrap_or(1_000_000) as f64;
+                    }
+                }
+                1_000_000.0 // Default cost
+            }
+            LogicalPlan::Join(join) => {
+                // Cost of join is the sum of:
+                // 1. Cost of left subtree
+                // 2. Cost of right subtree
+                // 3. Cost of the join operation itself (estimated output rows)
+                let left_cost = self.estimate_logical_plan_cost(&join.left);
+                let right_cost = self.estimate_logical_plan_cost(&join.right);
+
+                // Estimate join output size based on cardinality
+                let join_cost = match &join.cardinality {
+                    Some(Cardinality::OneToOne) => left_cost.min(right_cost),
+                    Some(Cardinality::OneToMany) => left_cost.max(right_cost),
+                    Some(Cardinality::ManyToOne) => left_cost, // Usually left is the many side
+                    Some(Cardinality::ManyToMany) => left_cost * right_cost.sqrt(), // Pessimistic estimate
+                    Some(Cardinality::Unknown) | None => (left_cost + right_cost) * 0.5, // Fallback: average
+                };
+
+                // Total cost accumulates as we build the plan tree
+                left_cost + right_cost + join_cost
+            }
+            LogicalPlan::Filter(filter) => {
+                // Filter reduces rows but adds some computation cost
+                let input_cost = self.estimate_logical_plan_cost(&filter.input);
+                // Assume filter reduces by 50% on average but adds 10% overhead
+                input_cost * 0.6
+            }
+            LogicalPlan::Aggregate(agg) => {
+                // Aggregation has cost of input plus grouping cost
+                let input_cost = self.estimate_logical_plan_cost(&agg.input);
+                input_cost * 1.5 // Add 50% for grouping overhead
+            }
+            LogicalPlan::TimeMeasure(tm) => self.estimate_logical_plan_cost(&tm.input) * 1.2,
+            LogicalPlan::DrillPath(dp) => self.estimate_logical_plan_cost(&dp.input) * 1.2,
+            LogicalPlan::InlineMeasure(im) => self.estimate_logical_plan_cost(&im.input) * 1.1,
+            LogicalPlan::Project(proj) => {
+                // Projection doesn't change row count, minimal overhead
+                self.estimate_logical_plan_cost(&proj.input) * 1.05
+            }
+            LogicalPlan::Sort(sort) => {
+                // Sorting has log-linear cost
+                let input_cost = self.estimate_logical_plan_cost(&sort.input);
+                input_cost * (input_cost.log2() + 1.0)
+            }
+            LogicalPlan::Limit(limit) => {
+                // Limit reduces output but still processes input
+                self.estimate_logical_plan_cost(&limit.input)
             }
         }
     }
