@@ -185,15 +185,21 @@ impl<'a> CostEstimator<'a> {
             return Err(PlanError::NoValidPlans);
         }
 
-        // For now, use simple heuristic: prefer plans with lower estimated_rows
+        // Use new multi-objective cost estimation
         let best = candidates
             .into_iter()
-            .min_by_key(|plan| self.estimate_cost(plan))
+            .min_by_key(|plan| self.estimate(plan).total() as u64)
             .unwrap();
 
         Ok(best)
     }
 
+    /// Legacy cost estimation method using simple heuristics.
+    ///
+    /// DEPRECATED: Use `estimate()` instead which provides multi-objective cost estimation
+    /// with graph metadata. This method is kept for backwards compatibility but is no longer
+    /// used in plan selection.
+    #[allow(dead_code)]
     fn estimate_cost(&self, plan: &PhysicalPlan) -> u64 {
         match plan {
             PhysicalPlan::TableScan { estimated_rows, .. } => {
