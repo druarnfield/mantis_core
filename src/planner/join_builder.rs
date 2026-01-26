@@ -34,7 +34,7 @@ impl<'a> JoinBuilder<'a> {
 
         // Join remaining tables in order
         for right_table in &tables[1..] {
-            let left_table = self.get_rightmost_table(&plan);
+            let left_table = self.get_rightmost_table(&plan)?;
 
             // Find path from left to right (may be multi-hop)
             let path = self
@@ -103,11 +103,13 @@ impl<'a> JoinBuilder<'a> {
     }
 
     /// Get the rightmost table in the join tree.
-    fn get_rightmost_table(&self, plan: &LogicalPlan) -> String {
+    fn get_rightmost_table(&self, plan: &LogicalPlan) -> PlanResult<String> {
         match plan {
-            LogicalPlan::Scan(scan) => scan.entity.clone(),
+            LogicalPlan::Scan(scan) => Ok(scan.entity.clone()),
             LogicalPlan::Join(join) => self.get_rightmost_table(&join.right),
-            _ => panic!("Unexpected plan node in join tree"),
+            _ => Err(PlanError::LogicalPlanError(
+                "Unexpected plan node in join tree - expected Scan or Join".into(),
+            )),
         }
     }
 }
