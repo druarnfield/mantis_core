@@ -16,6 +16,9 @@ pub mod dml;
 pub mod expr;
 pub mod query;
 pub mod token;
+pub mod types;
+
+pub use types::DataType as SqlDataType;
 
 #[cfg(test)]
 pub mod test_utils;
