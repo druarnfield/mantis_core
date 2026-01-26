@@ -301,6 +301,34 @@ impl Expr {
         });
         has_agg
     }
+
+    /// Extract all atom references from this expression.
+    ///
+    /// Returns a vector of atom names (without @ prefix).
+    /// Useful for dependency analysis and validation.
+    pub fn atom_refs(&self) -> Vec<String> {
+        let mut refs = Vec::new();
+        self.walk(&mut |expr| {
+            if let Expr::AtomRef(name) = expr {
+                refs.push(name.clone());
+            }
+        });
+        refs
+    }
+
+    /// Extract all column references (entity.column) from this expression.
+    ///
+    /// Returns a vector of (entity, column) tuples where entity is None
+    /// for unqualified column references.
+    pub fn column_refs(&self) -> Vec<(Option<String>, String)> {
+        let mut refs = Vec::new();
+        self.walk(&mut |expr| {
+            if let Expr::Column { entity, column } = expr {
+                refs.push((entity.clone(), column.clone()));
+            }
+        });
+        refs
+    }
 }
 
 // =============================================================================

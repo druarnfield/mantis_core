@@ -1,8 +1,9 @@
 //! Lowering DSL AST to semantic model.
 
 use crate::dsl::ast;
-use crate::dsl::span::Spanned;
+use crate::dsl::span::{Span, Spanned};
 use crate::model;
+use crate::model::expr::Expr;
 
 /// Lower DSL AST to semantic model.
 pub fn lower(ast: ast::Model) -> Result<model::Model, LoweringError> {
@@ -36,7 +37,7 @@ pub fn lower(ast: ast::Model) -> Result<model::Model, LoweringError> {
                 model.tables.insert(table.name.clone(), table);
             }
             ast::Item::MeasureBlock(meas) => {
-                let measure_block = lower_measure_block(meas)?;
+                let measure_block = lower_measure_block(meas, &model)?;
                 model
                     .measures
                     .insert(measure_block.table_name.clone(), measure_block);
@@ -278,27 +279,57 @@ fn lower_table(table: ast::Table) -> Result<model::Table, LoweringError> {
     })
 }
 
+/// Validate all atom references in an expression exist in the table.
+fn validate_atom_refs(expr: &Expr, table: &model::Table, span: &Span) -> Result<(), LoweringError> {
+    let atom_refs = expr.atom_refs();
+
+    for atom_name in atom_refs {
+        if !table.atoms.contains_key(&atom_name) {
+            return Err(LoweringError::UndefinedAtom {
+                atom: atom_name,
+                table: table.name.clone(),
+                span: span.clone(),
+            });
+        }
+    }
+
+    Ok(())
+}
+
 fn lower_measure_block(
     measure_block: ast::MeasureBlock,
+    model: &model::Model,
 ) -> Result<model::MeasureBlock, LoweringError> {
-    let table_name = measure_block.table.value;
+    let table_name = measure_block.table.value.clone();
+
+    // Get the table to validate atom references
+    let table = model
+        .tables
+        .get(&table_name)
+        .ok_or_else(|| LoweringError::UndefinedTable {
+            name: table_name.clone(),
+            span: measure_block.table.span.clone(),
+        })?;
 
     // Convert measures from Vec<Spanned<Measure>>
     let mut measures = std::collections::HashMap::new();
     for measure in measure_block.measures {
         let measure_name = measure.value.name.value.clone();
+
+        // Validate expression's atom references
+        validate_atom_refs(&measure.value.expr.value, table, &measure.value.expr.span)?;
+
+        // Validate filter's atom references (if present)
+        if let Some(filter) = &measure.value.filter {
+            validate_atom_refs(&filter.value, table, &filter.span)?;
+        }
+
         measures.insert(
             measure_name.clone(),
             model::measure::Measure {
                 name: measure_name,
-                expr: model::table::SqlExpr {
-                    sql: measure.value.expr.value.sql,
-                    span: measure.value.expr.value.span,
-                },
-                filter: measure.value.filter.map(|f| model::table::SqlExpr {
-                    sql: f.value.sql,
-                    span: f.value.span,
-                }),
+                expr: measure.value.expr.value.clone(),
+                filter: measure.value.filter.map(|f| f.value.clone()),
                 null_handling: measure.value.null_handling.map(|nh| nh.value),
             },
         );
@@ -493,6 +524,15 @@ pub enum LoweringError {
         drill_path_name: String,
         invalid_level: String,
     },
+    UndefinedAtom {
+        atom: String,
+        table: String,
+        span: Span,
+    },
+    UndefinedTable {
+        name: String,
+        span: Span,
+    },
 }
 
 impl std::fmt::Display for LoweringError {
@@ -508,6 +548,16 @@ impl std::fmt::Display for LoweringError {
                 "Invalid grain level '{}' in drill path '{}' of calendar '{}'",
                 invalid_level, drill_path_name, calendar_name
             ),
+            LoweringError::UndefinedAtom { atom, table, span } => {
+                write!(
+                    f,
+                    "Undefined atom '@{}' in table '{}' at {:?}",
+                    atom, table, span
+                )
+            }
+            LoweringError::UndefinedTable { name, span } => {
+                write!(f, "Undefined table '{}' at {:?}", name, span)
+            }
         }
     }
 }
