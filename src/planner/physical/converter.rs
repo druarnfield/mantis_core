@@ -1,6 +1,7 @@
 //! Convert logical plans to physical execution plans.
 
 use crate::planner::logical::LogicalPlan;
+use crate::planner::physical::join_optimizer::JoinOrderOptimizer;
 use crate::planner::physical::{PhysicalPlan, TableScanStrategy};
 use crate::planner::{PlanError, PlanResult};
 use crate::semantic::graph::UnifiedGraph;
@@ -16,7 +17,6 @@ fn format_projection_item(item: &crate::planner::logical::ProjectionItem) -> Str
 }
 
 pub struct PhysicalConverter<'a> {
-    #[allow(dead_code)]
     graph: &'a UnifiedGraph,
 }
 
@@ -52,6 +52,26 @@ impl<'a> PhysicalConverter<'a> {
     }
 
     fn convert_join(
+        &self,
+        join: &crate::planner::logical::JoinNode,
+    ) -> PlanResult<Vec<PhysicalPlan>> {
+        // Detect multi-table queries and use optimizer for join order
+        let join_plan = LogicalPlan::Join(join.clone());
+        let optimizer = JoinOrderOptimizer::new(self.graph);
+        let tables = optimizer.extract_tables(&join_plan);
+        let table_count = tables.len();
+
+        // For multi-table queries (2+ tables), use join order optimizer
+        if table_count >= 2 {
+            return self.convert_multi_table_join(&join_plan, table_count);
+        }
+
+        // Fallback for single table (shouldn't happen, but be defensive)
+        self.convert_simple_join(join)
+    }
+
+    /// Convert a simple join without optimization.
+    fn convert_simple_join(
         &self,
         join: &crate::planner::logical::JoinNode,
     ) -> PlanResult<Vec<PhysicalPlan>> {
@@ -103,6 +123,119 @@ impl<'a> PhysicalConverter<'a> {
         }
 
         Ok(plans)
+    }
+
+    /// Convert a multi-table join using the join order optimizer.
+    ///
+    /// For 2-3 tables: enumerate all join orders
+    /// For 4+ tables: use greedy algorithm
+    fn convert_multi_table_join(
+        &self,
+        join_plan: &LogicalPlan,
+        table_count: usize,
+    ) -> PlanResult<Vec<PhysicalPlan>> {
+        let optimizer = JoinOrderOptimizer::new(self.graph);
+
+        // Get optimized join orders
+        let logical_candidates = if table_count <= 3 {
+            // Small joins: enumerate all permutations
+            optimizer.enumerate_join_orders(join_plan)
+        } else {
+            // Large joins: use greedy algorithm
+            let tables = optimizer.extract_tables(join_plan);
+            let table_refs: Vec<&str> = tables.iter().map(|s| s.as_str()).collect();
+
+            if let Some(greedy_plan) = optimizer.greedy_join_order(&table_refs) {
+                vec![Some(greedy_plan)]
+            } else {
+                vec![]
+            }
+        };
+
+        // Convert each logical candidate to physical plans
+        let mut all_physical_plans = Vec::new();
+
+        for logical_candidate in logical_candidates {
+            if let Some(logical) = logical_candidate {
+                // Convert this logical plan to physical plans
+                let physical_candidates = self.convert_logical_to_physical(&logical)?;
+                all_physical_plans.extend(physical_candidates);
+            }
+        }
+
+        if all_physical_plans.is_empty() {
+            return Err(PlanError::PhysicalPlanError(
+                "No valid physical plans generated from optimizer".to_string(),
+            ));
+        }
+
+        Ok(all_physical_plans)
+    }
+
+    /// Convert an optimized logical plan to physical plans.
+    ///
+    /// This recursively converts the logical plan, generating both HashJoin and
+    /// NestedLoopJoin strategies for each join in the plan.
+    fn convert_logical_to_physical(&self, logical: &LogicalPlan) -> PlanResult<Vec<PhysicalPlan>> {
+        match logical {
+            LogicalPlan::Scan(scan) => Ok(vec![PhysicalPlan::TableScan {
+                table: scan.entity.clone(),
+                strategy: TableScanStrategy::FullScan,
+                estimated_rows: None,
+            }]),
+            LogicalPlan::Join(join) => {
+                use crate::planner::logical::JoinCondition;
+
+                // Convert join condition to column pairs
+                let on_columns: Vec<(String, String)> = match &join.on {
+                    JoinCondition::Equi(pairs) => pairs
+                        .iter()
+                        .map(|(left, right)| {
+                            (
+                                format!("{}.{}", left.entity, left.column),
+                                format!("{}.{}", right.entity, right.column),
+                            )
+                        })
+                        .collect(),
+                    JoinCondition::Expr(_) => {
+                        return Err(PlanError::PhysicalPlanError(
+                            "Complex join expressions not yet supported".to_string(),
+                        ));
+                    }
+                };
+
+                // Convert left and right inputs (no recursion into optimizer - already optimized)
+                let left_plans = self.convert_logical_to_physical(&join.left)?;
+                let right_plans = self.convert_logical_to_physical(&join.right)?;
+
+                let mut plans = Vec::new();
+
+                // Generate both HashJoin and NestedLoopJoin for each combination
+                for left_plan in &left_plans {
+                    for right_plan in &right_plans {
+                        plans.push(PhysicalPlan::HashJoin {
+                            left: Box::new(left_plan.clone()),
+                            right: Box::new(right_plan.clone()),
+                            on: on_columns.clone(),
+                            estimated_rows: None,
+                        });
+
+                        plans.push(PhysicalPlan::NestedLoopJoin {
+                            left: Box::new(left_plan.clone()),
+                            right: Box::new(right_plan.clone()),
+                            on: on_columns.clone(),
+                            estimated_rows: None,
+                        });
+                    }
+                }
+
+                Ok(plans)
+            }
+            _ => {
+                // For other node types, use regular convert
+                self.convert(logical)
+            }
+        }
     }
 
     fn convert_filter(
