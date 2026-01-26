@@ -6,12 +6,15 @@
 // Chumsky parsers are cheap to clone and cloning is required for parser combinators
 #![allow(clippy::clone_on_copy)]
 
-use chumsky::prelude::*;
 use chumsky::input::ValueInput;
+use chumsky::prelude::*;
 
 use super::ast::*;
 use super::lexer::Token;
 use super::span::Spanned;
+use crate::model::expr::Expr;
+use crate::model::expr_parser::parse_sql_expr;
+use crate::model::expr_validation::ExprContext;
 
 /// Convert a SimpleSpan to our Span type (Range<usize>)
 fn to_span(span: SimpleSpan) -> std::ops::Range<usize> {
@@ -23,7 +26,8 @@ fn to_span(span: SimpleSpan) -> std::ops::Range<usize> {
 /// Returns a parser that transforms a token stream into a Model AST.
 /// The parser is generic over the input type, accepting any `ValueInput`
 /// that produces `Token` values with `SimpleSpan` spans.
-pub fn parser<'tokens, 'src: 'tokens, I>() -> impl Parser<'tokens, I, Model, extra::Err<Rich<'tokens, Token<'src>, SimpleSpan>>>
+pub fn parser<'tokens, 'src: 'tokens, I>(
+) -> impl Parser<'tokens, I, Model, extra::Err<Rich<'tokens, Token<'src>, SimpleSpan>>>
 where
     I: ValueInput<'tokens, Token = Token<'src>, Span = SimpleSpan>,
 {
@@ -34,7 +38,8 @@ where
     // Parse an identifier (also allow keywords as identifiers in certain contexts)
     let ident = select! {
         Token::Ident(s) => s.to_string(),
-    }.labelled("identifier");
+    }
+    .labelled("identifier");
 
     // Parse an identifier or keyword that can be used as a name
     // This allows reserved words like "fiscal" to be used as calendar/table names
@@ -58,19 +63,22 @@ where
         Token::FiscalMonth => "fiscal_month".to_string(),
         Token::FiscalQuarter => "fiscal_quarter".to_string(),
         Token::FiscalYear => "fiscal_year".to_string(),
-    }.labelled("identifier or keyword");
+    }
+    .labelled("identifier or keyword");
 
     // Parse a string literal
     let string_lit = select! {
         Token::StringLit(s) => s.to_string(),
-    }.labelled("string literal");
+    }
+    .labelled("string literal");
 
     // Parse an atom type (int, decimal, float)
     let atom_type = select! {
         Token::Int => AtomType::Int,
         Token::Decimal => AtomType::Decimal,
         Token::Float => AtomType::Float,
-    }.labelled("atom type (int, decimal, float)");
+    }
+    .labelled("atom type (int, decimal, float)");
 
     // Parse a data type (string, int, decimal, float, bool, date, timestamp)
     let data_type = select! {
@@ -81,7 +89,8 @@ where
         Token::Bool => DataType::Bool,
         Token::Date => DataType::Date,
         Token::Timestamp => DataType::Timestamp,
-    }.labelled("data type");
+    }
+    .labelled("data type");
 
     // Parse a grain level
     let grain_level = select! {
@@ -95,7 +104,8 @@ where
         Token::FiscalMonth => GrainLevel::FiscalMonth,
         Token::FiscalQuarter => GrainLevel::FiscalQuarter,
         Token::FiscalYear => GrainLevel::FiscalYear,
-    }.labelled("grain level");
+    }
+    .labelled("grain level");
 
     // Parse a month
     let month = select! {
@@ -111,7 +121,8 @@ where
         Token::October => Month::October,
         Token::November => Month::November,
         Token::December => Month::December,
-    }.labelled("month");
+    }
+    .labelled("month");
 
     // Parse a weekday
     let weekday = select! {
@@ -122,14 +133,16 @@ where
         Token::Friday => Weekday::Friday,
         Token::Saturday => Weekday::Saturday,
         Token::Sunday => Weekday::Sunday,
-    }.labelled("weekday");
+    }
+    .labelled("weekday");
 
     // Parse NULL handling mode
     let null_handling = select! {
         Token::CoalesceZero => NullHandling::CoalesceZero,
         Token::NullOnZero => NullHandling::NullOnZero,
         Token::ErrorOnZero => NullHandling::ErrorOnZero,
-    }.labelled("null handling mode");
+    }
+    .labelled("null handling mode");
 
     // ==========================================================================
     // SQL expression parser (reusable)
@@ -141,30 +154,29 @@ where
         .map_with(|t: Token, e| (t.to_string(), to_span(e.span())));
 
     // SQL expression parser: { sql_tokens }
-    // Parses tokens between braces and reconstructs SQL string
-    // Note: whitespace handling is basic - joins tokens with single space
-    // This is sufficient for SQL expressions but doesn't handle all edge cases
-    let sql_expr = just(Token::LBrace)
-        .map_with(|_, e| to_span(e.span()))
-        .then(
-            sql_token.clone()
-                .repeated()
-                .collect::<Vec<_>>()
-        )
-        .then(
-            just(Token::RBrace)
-                .map_with(|_, e| to_span(e.span()))
-        )
-        .map(|((lbrace_span, tokens), rbrace_span)| {
-            // Reconstruct SQL from tokens, joining with spaces
-            let sql = tokens.iter()
-                .map(|(s, _)| s.as_str())
-                .collect::<Vec<_>>()
-                .join(" ");
-            // Span covers from LBrace start to RBrace end
-            let span = lbrace_span.start..rbrace_span.end;
-            SqlExpr::new(sql, span)
-        });
+    // Parses tokens between braces, reconstructs SQL string, and parses into Expr AST
+    // Takes an ExprContext parameter to validate the expression appropriately
+    let sql_expr = |context: ExprContext| {
+        just(Token::LBrace)
+            .map_with(|_, e| to_span(e.span()))
+            .then(sql_token.clone().repeated().collect::<Vec<_>>())
+            .then(just(Token::RBrace).map_with(|_, e| to_span(e.span())))
+            .try_map(move |((lbrace_span, tokens), rbrace_span), span| {
+                // Reconstruct SQL from tokens, joining with spaces
+                let sql = tokens
+                    .iter()
+                    .map(|(s, _)| s.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" ");
+
+                // Full span from LBrace to RBrace
+                let full_span = lbrace_span.start..rbrace_span.end;
+
+                // Parse SQL into Expr AST
+                parse_sql_expr(&sql, full_span.clone(), context)
+                    .map_err(|e| Rich::custom(span, e.to_string()))
+            })
+    };
 
     // Parse a date literal from a Number token (YYYY-MM-DD format)
     // The lexer produces numbers like "2024" or "2024.01" but dates are YYYY-MM-DD
@@ -177,9 +189,15 @@ where
     .then_ignore(just(Token::Minus))
     .then(select! { Token::Number(s) => s })
     .try_map(|((year_str, month_str), day_str), span| {
-        let year: u16 = year_str.parse().map_err(|_| Rich::custom(span, "invalid year"))?;
-        let month: u8 = month_str.parse().map_err(|_| Rich::custom(span, "invalid month"))?;
-        let day: u8 = day_str.parse().map_err(|_| Rich::custom(span, "invalid day"))?;
+        let year: u16 = year_str
+            .parse()
+            .map_err(|_| Rich::custom(span, "invalid year"))?;
+        let month: u8 = month_str
+            .parse()
+            .map_err(|_| Rich::custom(span, "invalid month"))?;
+        let day: u8 = day_str
+            .parse()
+            .map_err(|_| Rich::custom(span, "invalid day"))?;
         Ok(DateLiteral::new(year, month, day))
     })
     .labelled("date literal (YYYY-MM-DD)");
@@ -191,32 +209,36 @@ where
     // Parse a default setting
     let default_setting_calendar = just(Token::Calendar)
         .ignore_then(
-            ident.clone()
-                .map_with(|n, e| Spanned::new(n, to_span(e.span())))
+            ident
+                .clone()
+                .map_with(|n, e| Spanned::new(n, to_span(e.span()))),
         )
         .then_ignore(just(Token::Semicolon))
         .map(DefaultSetting::Calendar);
 
     let default_setting_fiscal_year_start = just(Token::FiscalYearStart)
         .ignore_then(
-            month.clone()
-                .map_with(|m, e| Spanned::new(m, to_span(e.span())))
+            month
+                .clone()
+                .map_with(|m, e| Spanned::new(m, to_span(e.span()))),
         )
         .then_ignore(just(Token::Semicolon))
         .map(DefaultSetting::FiscalYearStart);
 
     let default_setting_week_start = just(Token::WeekStart)
         .ignore_then(
-            weekday.clone()
-                .map_with(|w, e| Spanned::new(w, to_span(e.span())))
+            weekday
+                .clone()
+                .map_with(|w, e| Spanned::new(w, to_span(e.span()))),
         )
         .then_ignore(just(Token::Semicolon))
         .map(DefaultSetting::WeekStart);
 
     let default_setting_null_handling = just(Token::NullHandling)
         .ignore_then(
-            null_handling.clone()
-                .map_with(|nh, e| Spanned::new(nh, to_span(e.span())))
+            null_handling
+                .clone()
+                .map_with(|nh, e| Spanned::new(nh, to_span(e.span()))),
         )
         .then_ignore(just(Token::Semicolon))
         .map(DefaultSetting::NullHandling);
@@ -225,9 +247,10 @@ where
         .ignore_then(
             select! { Token::Number(s) => s }
                 .try_map(|s, span| {
-                    s.parse::<u8>().map_err(|_| Rich::custom(span, "invalid decimal places"))
+                    s.parse::<u8>()
+                        .map_err(|_| Rich::custom(span, "invalid decimal places"))
                 })
-                .map_with(|n, e| Spanned::new(n, to_span(e.span())))
+                .map_with(|n, e| Spanned::new(n, to_span(e.span()))),
         )
         .then_ignore(just(Token::Semicolon))
         .map(DefaultSetting::DecimalPlaces);
@@ -247,7 +270,7 @@ where
                 .map_with(|s, e| Spanned::new(s, to_span(e.span())))
                 .repeated()
                 .collect::<Vec<_>>()
-                .delimited_by(just(Token::LBrace), just(Token::RBrace))
+                .delimited_by(just(Token::LBrace), just(Token::RBrace)),
         )
         .map(|settings| Defaults { settings })
         .map_with(|d, e| Spanned::new(d, to_span(e.span())));
@@ -256,66 +279,64 @@ where
     // Atoms block: atoms { name type; ... }
     // ==========================================================================
 
-    let atom = ident.clone()
+    let atom = ident
+        .clone()
         .map_with(|n, e| Spanned::new(n, to_span(e.span())))
-        .then(
-            atom_type
-                .map_with(|t, e| Spanned::new(t, to_span(e.span())))
-        )
+        .then(atom_type.map_with(|t, e| Spanned::new(t, to_span(e.span()))))
         .then_ignore(just(Token::Semicolon))
         .map(|(name, atom_type)| Atom { name, atom_type });
 
-    let atoms_block = just(Token::Atoms)
-        .ignore_then(
-            atom
-                .map_with(|a, e| Spanned::new(a, to_span(e.span())))
-                .repeated()
-                .collect::<Vec<_>>()
-                .delimited_by(just(Token::LBrace), just(Token::RBrace))
-        );
+    let atoms_block = just(Token::Atoms).ignore_then(
+        atom.map_with(|a, e| Spanned::new(a, to_span(e.span())))
+            .repeated()
+            .collect::<Vec<_>>()
+            .delimited_by(just(Token::LBrace), just(Token::RBrace)),
+    );
 
     // ==========================================================================
     // Times block: times { name -> calendar.grain; ... }
     // ==========================================================================
 
-    let time_binding = ident.clone()
+    let time_binding = ident
+        .clone()
         .map_with(|n, e| Spanned::new(n, to_span(e.span())))
         .then_ignore(just(Token::Arrow))
         .then(
-            ident.clone()
-                .map_with(|c, e| Spanned::new(c, to_span(e.span())))
+            ident
+                .clone()
+                .map_with(|c, e| Spanned::new(c, to_span(e.span()))),
         )
         .then_ignore(just(Token::Dot))
-        .then(
-            grain_level
-                .map_with(|g, e| Spanned::new(g, to_span(e.span())))
-        )
+        .then(grain_level.map_with(|g, e| Spanned::new(g, to_span(e.span()))))
         .then_ignore(just(Token::Semicolon))
-        .map(|((name, calendar), grain)| TimeBinding { name, calendar, grain });
+        .map(|((name, calendar), grain)| TimeBinding {
+            name,
+            calendar,
+            grain,
+        });
 
-    let times_block = just(Token::Times)
-        .ignore_then(
-            time_binding
-                .map_with(|t, e| Spanned::new(t, to_span(e.span())))
-                .repeated()
-                .collect::<Vec<_>>()
-                .delimited_by(just(Token::LBrace), just(Token::RBrace))
-        );
+    let times_block = just(Token::Times).ignore_then(
+        time_binding
+            .map_with(|t, e| Spanned::new(t, to_span(e.span())))
+            .repeated()
+            .collect::<Vec<_>>()
+            .delimited_by(just(Token::LBrace), just(Token::RBrace)),
+    );
 
     // ==========================================================================
     // Slicers block: slicers { ... }
     // ==========================================================================
 
     // Inline slicer: name type;
-    let slicer_inline = ident.clone()
+    let slicer_inline = ident
+        .clone()
         .map_with(|n, e| Spanned::new(n, to_span(e.span())))
-        .then(
-            data_type
-                .map_with(|t, e| Spanned::new(t, to_span(e.span())))
-        )
+        .then(data_type.map_with(|t, e| Spanned::new(t, to_span(e.span()))))
         .then_ignore(just(Token::Semicolon))
         .map_with(|(name, data_type_spanned), e| {
-            let kind = SlicerKind::Inline { data_type: data_type_spanned.value };
+            let kind = SlicerKind::Inline {
+                data_type: data_type_spanned.value,
+            };
             Slicer {
                 name,
                 kind: Spanned::new(kind, to_span(e.span())),
@@ -323,7 +344,8 @@ where
         });
 
     // FK slicer: name -> dimension.key;
-    let slicer_fk = ident.clone()
+    let slicer_fk = ident
+        .clone()
         .map_with(|n, e| Spanned::new(n, to_span(e.span())))
         .then_ignore(just(Token::Arrow))
         .then(ident.clone())
@@ -331,7 +353,10 @@ where
         .then(ident.clone())
         .then_ignore(just(Token::Semicolon))
         .map_with(|((name, dimension), key_column), e| {
-            let kind = SlicerKind::ForeignKey { dimension, key_column };
+            let kind = SlicerKind::ForeignKey {
+                dimension,
+                key_column,
+            };
             Slicer {
                 name,
                 kind: Spanned::new(kind, to_span(e.span())),
@@ -339,7 +364,8 @@ where
         });
 
     // Via slicer: name via other_slicer;
-    let slicer_via = ident.clone()
+    let slicer_via = ident
+        .clone()
         .map_with(|n, e| Spanned::new(n, to_span(e.span())))
         .then_ignore(just(Token::Via))
         .then(ident.clone())
@@ -353,14 +379,12 @@ where
         });
 
     // Calculated slicer: name type = { sql_expr };
-    let slicer_calculated = ident.clone()
+    let slicer_calculated = ident
+        .clone()
         .map_with(|n, e| Spanned::new(n, to_span(e.span())))
-        .then(
-            data_type
-                .map_with(|t, e| Spanned::new(t, to_span(e.span())))
-        )
+        .then(data_type.map_with(|t, e| Spanned::new(t, to_span(e.span()))))
         .then_ignore(just(Token::Eq))
-        .then(sql_expr.clone())
+        .then(sql_expr(ExprContext::CalculatedSlicer))
         .then_ignore(just(Token::Semicolon))
         .map_with(|((name, data_type_spanned), expr), e| {
             let kind = SlicerKind::Calculated {
@@ -375,43 +399,40 @@ where
 
     // Order matters: try FK and Via first (they have distinguishing tokens),
     // then calculated (has = { }), then fall back to inline
-    let slicer = choice((
-        slicer_fk,
-        slicer_via,
-        slicer_calculated,
-        slicer_inline,
-    ));
+    let slicer = choice((slicer_fk, slicer_via, slicer_calculated, slicer_inline));
 
-    let slicers_block = just(Token::Slicers)
-        .ignore_then(
-            slicer
-                .map_with(|s, e| Spanned::new(s, to_span(e.span())))
-                .repeated()
-                .collect::<Vec<_>>()
-                .delimited_by(just(Token::LBrace), just(Token::RBrace))
-        );
+    let slicers_block = just(Token::Slicers).ignore_then(
+        slicer
+            .map_with(|s, e| Spanned::new(s, to_span(e.span())))
+            .repeated()
+            .collect::<Vec<_>>()
+            .delimited_by(just(Token::LBrace), just(Token::RBrace)),
+    );
 
     // ==========================================================================
     // Drill Path: drill_path name { level1 -> level2 -> ... };
     // ==========================================================================
 
     // Parse a drill path level (identifier or grain keyword treated as identifier)
-    let drill_level = ident.clone()
+    let drill_level = ident
+        .clone()
         .or(grain_level.clone().map(|g| g.to_string()))
         .map_with(|s, e| Spanned::new(s, to_span(e.span())));
 
     // drill_path name { level -> level -> ... };
     let drill_path = just(Token::DrillPath)
         .ignore_then(
-            ident.clone()
-                .map_with(|n, e| Spanned::new(n, to_span(e.span())))
+            ident
+                .clone()
+                .map_with(|n, e| Spanned::new(n, to_span(e.span()))),
         )
         .then(
-            drill_level.clone()
+            drill_level
+                .clone()
                 .separated_by(just(Token::Arrow))
                 .at_least(1)
                 .collect::<Vec<_>>()
-                .delimited_by(just(Token::LBrace), just(Token::RBrace))
+                .delimited_by(just(Token::LBrace), just(Token::RBrace)),
         )
         .then_ignore(just(Token::Semicolon))
         .map(|(name, levels)| DrillPath { name, levels });
@@ -424,8 +445,9 @@ where
     // e.g., generate day+;
     let generate_stmt = just(Token::Generate)
         .ignore_then(
-            grain_level.clone()
-                .map_with(|g, e| Spanned::new(g, to_span(e.span())))
+            grain_level
+                .clone()
+                .map_with(|g, e| Spanned::new(g, to_span(e.span()))),
         )
         .then_ignore(just(Token::Plus))
         .then_ignore(just(Token::Semicolon));
@@ -437,51 +459,57 @@ where
         .then(
             just(Token::Min)
                 .ignore_then(
-                    date_literal.clone()
-                        .map_with(|d, e| Spanned::new(d, to_span(e.span())))
+                    date_literal
+                        .clone()
+                        .map_with(|d, e| Spanned::new(d, to_span(e.span()))),
                 )
-                .or_not()
+                .or_not(),
         )
         .then(
             just(Token::Max)
                 .ignore_then(
-                    date_literal.clone()
-                        .map_with(|d, e| Spanned::new(d, to_span(e.span())))
+                    date_literal
+                        .clone()
+                        .map_with(|d, e| Spanned::new(d, to_span(e.span()))),
                 )
-                .or_not()
+                .or_not(),
         )
         .then_ignore(just(Token::Semicolon))
         .map(|((_, min), max)| CalendarRange::Infer { min, max });
 
     let range_explicit = just(Token::Range)
         .ignore_then(
-            date_literal.clone()
-                .map_with(|d, e| Spanned::new(d, to_span(e.span())))
+            date_literal
+                .clone()
+                .map_with(|d, e| Spanned::new(d, to_span(e.span()))),
         )
         .then_ignore(just(Token::To))
         .then(
-            date_literal.clone()
-                .map_with(|d, e| Spanned::new(d, to_span(e.span())))
+            date_literal
+                .clone()
+                .map_with(|d, e| Spanned::new(d, to_span(e.span()))),
         )
         .then_ignore(just(Token::Semicolon))
         .map(|(start, end)| CalendarRange::Explicit { start, end });
 
-    let range_stmt = choice((range_infer, range_explicit))
-        .map_with(|r, e| Spanned::new(r, to_span(e.span())));
+    let range_stmt =
+        choice((range_infer, range_explicit)).map_with(|r, e| Spanned::new(r, to_span(e.span())));
 
     // week_start statement: week_start Monday;
     let week_start_stmt = just(Token::WeekStart)
         .ignore_then(
-            weekday.clone()
-                .map_with(|w, e| Spanned::new(w, to_span(e.span())))
+            weekday
+                .clone()
+                .map_with(|w, e| Spanned::new(w, to_span(e.span()))),
         )
         .then_ignore(just(Token::Semicolon));
 
     // fiscal_year_start statement: fiscal_year_start July;
     let fiscal_year_start_stmt = just(Token::FiscalYearStart)
         .ignore_then(
-            month.clone()
-                .map_with(|m, e| Spanned::new(m, to_span(e.span())))
+            month
+                .clone()
+                .map_with(|m, e| Spanned::new(m, to_span(e.span()))),
         )
         .then_ignore(just(Token::Semicolon));
 
@@ -490,20 +518,23 @@ where
         .ignore_then(just(Token::Fiscal))
         .ignore_then(just(Token::LBracket))
         .ignore_then(
-            month.clone()
-                .map_with(|m, e| Spanned::new(m, to_span(e.span())))
+            month
+                .clone()
+                .map_with(|m, e| Spanned::new(m, to_span(e.span()))),
         )
         .then_ignore(just(Token::RBracket))
         .then_ignore(just(Token::Semicolon));
 
     // Grain mapping for physical calendar: grain = column;
     // e.g., day = date_key;
-    let grain_mapping = grain_level.clone()
+    let grain_mapping = grain_level
+        .clone()
         .map_with(|g, e| Spanned::new(g, to_span(e.span())))
         .then_ignore(just(Token::Eq))
         .then(
-            ident.clone()
-                .map_with(|c, e| Spanned::new(c, to_span(e.span())))
+            ident
+                .clone()
+                .map_with(|c, e| Spanned::new(c, to_span(e.span()))),
         )
         .then_ignore(just(Token::Semicolon))
         .map(|(level, column)| GrainMapping { level, column });
@@ -527,7 +558,8 @@ where
     let gen_cal_part = choice((
         generate_stmt.clone().map(GenCalPart::Generate),
         range_stmt.clone().map(GenCalPart::Range),
-        drill_path.clone()
+        drill_path
+            .clone()
             .map_with(|dp, e| Spanned::new(dp, to_span(e.span())))
             .map(GenCalPart::DrillPath),
         week_start_stmt.clone().map(GenCalPart::WeekStart),
@@ -606,13 +638,17 @@ where
     }
 
     let phys_cal_part = choice((
-        grain_mapping.clone()
+        grain_mapping
+            .clone()
             .map_with(|gm, e| Spanned::new(gm, to_span(e.span())))
             .map(PhysCalPart::GrainMapping),
-        drill_path.clone()
+        drill_path
+            .clone()
             .map_with(|dp, e| Spanned::new(dp, to_span(e.span())))
             .map(PhysCalPart::DrillPath),
-        fiscal_year_start_stmt.clone().map(PhysCalPart::FiscalYearStart),
+        fiscal_year_start_stmt
+            .clone()
+            .map(PhysCalPart::FiscalYearStart),
         week_start_stmt.clone().map(PhysCalPart::WeekStart),
     ));
 
@@ -636,7 +672,10 @@ where
                     }
                     PhysCalPart::FiscalYearStart(f) => {
                         if fiscal_year_start.is_some() {
-                            return Err(Rich::custom(span, "duplicate fiscal_year_start statement"));
+                            return Err(Rich::custom(
+                                span,
+                                "duplicate fiscal_year_start statement",
+                            ));
                         }
                         fiscal_year_start = Some(f);
                     }
@@ -650,7 +689,10 @@ where
             }
 
             if grain_mappings.is_empty() {
-                return Err(Rich::custom(span, "physical calendar requires at least one grain mapping"));
+                return Err(Rich::custom(
+                    span,
+                    "physical calendar requires at least one grain mapping",
+                ));
             }
 
             Ok((grain_mappings, drill_paths, fiscal_year_start, week_start))
@@ -660,43 +702,51 @@ where
     // Has a source string after the name
     let physical_calendar = just(Token::Calendar)
         .ignore_then(
-            ident_or_keyword.clone()
-                .map_with(|n, e| Spanned::new(n, to_span(e.span())))
+            ident_or_keyword
+                .clone()
+                .map_with(|n, e| Spanned::new(n, to_span(e.span()))),
         )
         .then(
-            string_lit.clone()
-                .map_with(|s, e| Spanned::new(s, to_span(e.span())))
+            string_lit
+                .clone()
+                .map_with(|s, e| Spanned::new(s, to_span(e.span()))),
         )
         .then(
             physical_calendar_body
                 .delimited_by(just(Token::LBrace), just(Token::RBrace))
-                .map_with(|body, e| (body, to_span(e.span())))
+                .map_with(|body, e| (body, to_span(e.span()))),
         )
-        .map(|((name, source), ((grain_mappings, drill_paths, fiscal_year_start, week_start), body_span))| {
-            let body = CalendarBody::Physical(PhysicalCalendar {
-                source,
-                grain_mappings,
-                drill_paths,
-                fiscal_year_start,
-                week_start,
-            });
-            Calendar {
-                name,
-                body: Spanned::new(body, body_span),
-            }
-        });
+        .map(
+            |(
+                (name, source),
+                ((grain_mappings, drill_paths, fiscal_year_start, week_start), body_span),
+            )| {
+                let body = CalendarBody::Physical(PhysicalCalendar {
+                    source,
+                    grain_mappings,
+                    drill_paths,
+                    fiscal_year_start,
+                    week_start,
+                });
+                Calendar {
+                    name,
+                    body: Spanned::new(body, body_span),
+                }
+            },
+        );
 
     // Generated calendar: calendar name { generate ...; ... }
     // No source string after the name
     let generated_calendar = just(Token::Calendar)
         .ignore_then(
-            ident_or_keyword.clone()
-                .map_with(|n, e| Spanned::new(n, to_span(e.span())))
+            ident_or_keyword
+                .clone()
+                .map_with(|n, e| Spanned::new(n, to_span(e.span()))),
         )
         .then(
             generated_calendar_body
                 .delimited_by(just(Token::LBrace), just(Token::RBrace))
-                .map_with(|body, e| (body, to_span(e.span())))
+                .map_with(|body, e| (body, to_span(e.span()))),
         )
         .map(|(name, (gen_cal, body_span))| {
             let body = CalendarBody::Generated(gen_cal);
@@ -707,32 +757,32 @@ where
         });
 
     // Calendar: try physical first (has string lit), then generated
-    let calendar = physical_calendar
-        .or(generated_calendar);
+    let calendar = physical_calendar.or(generated_calendar);
 
     // ==========================================================================
     // Dimension definition
     // ==========================================================================
 
     // Attribute: name type;
-    let attribute = ident.clone()
+    let attribute = ident
+        .clone()
         .map_with(|n, e| Spanned::new(n, to_span(e.span())))
         .then(
-            data_type.clone()
-                .map_with(|t, e| Spanned::new(t, to_span(e.span())))
+            data_type
+                .clone()
+                .map_with(|t, e| Spanned::new(t, to_span(e.span()))),
         )
         .then_ignore(just(Token::Semicolon))
         .map(|(name, data_type)| Attribute { name, data_type });
 
     // Attributes block: attributes { name type; ... }
-    let attributes_block = just(Token::Attributes)
-        .ignore_then(
-            attribute
-                .map_with(|a, e| Spanned::new(a, to_span(e.span())))
-                .repeated()
-                .collect::<Vec<_>>()
-                .delimited_by(just(Token::LBrace), just(Token::RBrace))
-        );
+    let attributes_block = just(Token::Attributes).ignore_then(
+        attribute
+            .map_with(|a, e| Spanned::new(a, to_span(e.span())))
+            .repeated()
+            .collect::<Vec<_>>()
+            .delimited_by(just(Token::LBrace), just(Token::RBrace)),
+    );
 
     // Dimension body parts
     #[derive(Clone)]
@@ -745,94 +795,87 @@ where
 
     let dim_source = just(Token::Source)
         .ignore_then(
-            string_lit.clone()
-                .map_with(|s, e| Spanned::new(s, to_span(e.span())))
+            string_lit
+                .clone()
+                .map_with(|s, e| Spanned::new(s, to_span(e.span()))),
         )
         .then_ignore(just(Token::Semicolon))
         .map(DimPart::Source);
 
     let dim_key = just(Token::Key)
         .ignore_then(
-            ident.clone()
-                .map_with(|k, e| Spanned::new(k, to_span(e.span())))
+            ident
+                .clone()
+                .map_with(|k, e| Spanned::new(k, to_span(e.span()))),
         )
         .then_ignore(just(Token::Semicolon))
         .map(DimPart::Key);
 
     let dim_attributes = attributes_block.clone().map(DimPart::Attributes);
 
-    let dim_drill_path = drill_path.clone()
+    let dim_drill_path = drill_path
+        .clone()
         .map_with(|dp, e| Spanned::new(dp, to_span(e.span())))
         .map(DimPart::DrillPath);
 
-    let dim_part = choice((
-        dim_source,
-        dim_key,
-        dim_attributes,
-        dim_drill_path,
-    ));
+    let dim_part = choice((dim_source, dim_key, dim_attributes, dim_drill_path));
 
-    let dimension_body = dim_part
-        .repeated()
-        .at_least(1)
-        .collect::<Vec<_>>()
-        .try_map(|parts, span| {
-            let mut source: Option<Spanned<String>> = None;
-            let mut key: Option<Spanned<String>> = None;
-            let mut attributes: Vec<Spanned<Attribute>> = Vec::new();
-            let mut drill_paths: Vec<Spanned<DrillPath>> = Vec::new();
+    let dimension_body =
+        dim_part
+            .repeated()
+            .at_least(1)
+            .collect::<Vec<_>>()
+            .try_map(|parts, span| {
+                let mut source: Option<Spanned<String>> = None;
+                let mut key: Option<Spanned<String>> = None;
+                let mut attributes: Vec<Spanned<Attribute>> = Vec::new();
+                let mut drill_paths: Vec<Spanned<DrillPath>> = Vec::new();
 
-            for part in parts {
-                match part {
-                    DimPart::Source(s) => {
-                        if source.is_some() {
-                            return Err(Rich::custom(span, "duplicate source statement"));
+                for part in parts {
+                    match part {
+                        DimPart::Source(s) => {
+                            if source.is_some() {
+                                return Err(Rich::custom(span, "duplicate source statement"));
+                            }
+                            source = Some(s);
                         }
-                        source = Some(s);
-                    }
-                    DimPart::Key(k) => {
-                        if key.is_some() {
-                            return Err(Rich::custom(span, "duplicate key statement"));
+                        DimPart::Key(k) => {
+                            if key.is_some() {
+                                return Err(Rich::custom(span, "duplicate key statement"));
+                            }
+                            key = Some(k);
                         }
-                        key = Some(k);
-                    }
-                    DimPart::Attributes(attrs) => {
-                        attributes.extend(attrs);
-                    }
-                    DimPart::DrillPath(dp) => {
-                        drill_paths.push(dp);
+                        DimPart::Attributes(attrs) => {
+                            attributes.extend(attrs);
+                        }
+                        DimPart::DrillPath(dp) => {
+                            drill_paths.push(dp);
+                        }
                     }
                 }
-            }
 
-            let source = source.ok_or_else(|| {
-                Rich::custom(span, "dimension requires source statement")
-            })?;
-            let key = key.ok_or_else(|| {
-                Rich::custom(span, "dimension requires key statement")
-            })?;
+                let source = source
+                    .ok_or_else(|| Rich::custom(span, "dimension requires source statement"))?;
+                let key =
+                    key.ok_or_else(|| Rich::custom(span, "dimension requires key statement"))?;
 
-            Ok((source, key, attributes, drill_paths))
-        });
+                Ok((source, key, attributes, drill_paths))
+            });
 
     // dimension name { source "..."; key ...; attributes { ... } drill_path ... { ... }; }
     let dimension = just(Token::Dimension)
         .ignore_then(
-            ident.clone()
-                .map_with(|n, e| Spanned::new(n, to_span(e.span())))
+            ident
+                .clone()
+                .map_with(|n, e| Spanned::new(n, to_span(e.span()))),
         )
-        .then(
-            dimension_body
-                .delimited_by(just(Token::LBrace), just(Token::RBrace))
-        )
-        .map(|(name, (source, key, attributes, drill_paths))| {
-            Dimension {
-                name,
-                source,
-                key,
-                attributes,
-                drill_paths,
-            }
+        .then(dimension_body.delimited_by(just(Token::LBrace), just(Token::RBrace)))
+        .map(|(name, (source, key, attributes, drill_paths))| Dimension {
+            name,
+            source,
+            key,
+            attributes,
+            drill_paths,
         });
 
     // ==========================================================================
@@ -842,30 +885,26 @@ where
     // table name { source "..."; atoms { ... } times { ... } slicers { ... } }
     let table = just(Token::Table)
         .ignore_then(
-            ident.clone()
-                .map_with(|n, e| Spanned::new(n, to_span(e.span())))
+            ident
+                .clone()
+                .map_with(|n, e| Spanned::new(n, to_span(e.span()))),
         )
         .then(
             // Inside the table braces
             just(Token::Source)
-                .ignore_then(
-                    string_lit
-                        .map_with(|s, e| Spanned::new(s, to_span(e.span())))
-                )
+                .ignore_then(string_lit.map_with(|s, e| Spanned::new(s, to_span(e.span()))))
                 .then_ignore(just(Token::Semicolon))
                 .then(atoms_block.or_not())
                 .then(times_block.or_not())
                 .then(slicers_block.or_not())
-                .delimited_by(just(Token::LBrace), just(Token::RBrace))
+                .delimited_by(just(Token::LBrace), just(Token::RBrace)),
         )
-        .map(|(name, (((source, atoms), times), slicers))| {
-            Table {
-                name,
-                source,
-                atoms: atoms.unwrap_or_default(),
-                times: times.unwrap_or_default(),
-                slicers: slicers.unwrap_or_default(),
-            }
+        .map(|(name, (((source, atoms), times), slicers))| Table {
+            name,
+            source,
+            atoms: atoms.unwrap_or_default(),
+            times: times.unwrap_or_default(),
+            slicers: slicers.unwrap_or_default(),
         });
 
     // ==========================================================================
@@ -873,28 +912,30 @@ where
     // ==========================================================================
 
     // Measure: name = { expr } [where { cond }] [null mode];
-    let measure = ident.clone()
+    let measure = ident
+        .clone()
         .map_with(|n, e| Spanned::new(n, to_span(e.span())))
         .then_ignore(just(Token::Eq))
         .then(
-            sql_expr.clone()
-                .map_with(|expr, e| Spanned::new(expr, to_span(e.span())))
+            sql_expr(ExprContext::Measure)
+                .map_with(|expr, e| Spanned::new(expr, to_span(e.span()))),
         )
         .then(
             just(Token::Where)
                 .ignore_then(
-                    sql_expr.clone()
-                        .map_with(|expr, e| Spanned::new(expr, to_span(e.span())))
+                    sql_expr(ExprContext::Filter)
+                        .map_with(|expr, e| Spanned::new(expr, to_span(e.span()))),
                 )
-                .or_not()
+                .or_not(),
         )
         .then(
             just(Token::Null)
                 .ignore_then(
-                    null_handling.clone()
-                        .map_with(|nh, e| Spanned::new(nh, to_span(e.span())))
+                    null_handling
+                        .clone()
+                        .map_with(|nh, e| Spanned::new(nh, to_span(e.span()))),
                 )
-                .or_not()
+                .or_not(),
         )
         .then_ignore(just(Token::Semicolon))
         .map(|(((name, expr), filter), null_handling)| Measure {
@@ -907,15 +948,16 @@ where
     // measures table_name { measure; ... }
     let measures_block = just(Token::Measures)
         .ignore_then(
-            ident.clone()
-                .map_with(|n, e| Spanned::new(n, to_span(e.span())))
+            ident
+                .clone()
+                .map_with(|n, e| Spanned::new(n, to_span(e.span()))),
         )
         .then(
             measure
                 .map_with(|m, e| Spanned::new(m, to_span(e.span())))
                 .repeated()
                 .collect::<Vec<_>>()
-                .delimited_by(just(Token::LBrace), just(Token::RBrace))
+                .delimited_by(just(Token::LBrace), just(Token::RBrace)),
         )
         .map(|(table, measures)| MeasureBlock { table, measures });
 
@@ -943,7 +985,8 @@ where
         Token::ThisFiscalQuarter => RelativePeriod::ThisFiscalQuarter,
         Token::LastFiscalQuarter => RelativePeriod::LastFiscalQuarter,
         Token::FiscalYtd => RelativePeriod::FiscalYtd,
-    }.labelled("relative period");
+    }
+    .labelled("relative period");
 
     // Parse trailing period pattern: last_N_<unit>
     // Pattern is tokenized as Token::Ident, so we need to parse and validate it
@@ -1001,11 +1044,13 @@ where
         Token::Rolling3mAvg => TimeSuffix::Rolling3mAvg,
         Token::Rolling6mAvg => TimeSuffix::Rolling6mAvg,
         Token::Rolling12mAvg => TimeSuffix::Rolling12mAvg,
-    }.labelled("time suffix");
+    }
+    .labelled("time suffix");
 
     // Parse drill path reference: source.path.level
     // Use ident_or_keyword for level to allow grain levels like "month", "quarter", etc.
-    let drill_path_ref = ident.clone()
+    let drill_path_ref = ident
+        .clone()
         .then_ignore(just(Token::Dot))
         .then(ident.clone())
         .then_ignore(just(Token::Dot))
@@ -1019,11 +1064,7 @@ where
 
     // Parse group item: drill_path_ref [as "Label"];
     let group_item = drill_path_ref
-        .then(
-            just(Token::As)
-                .ignore_then(string_lit.clone())
-                .or_not()
-        )
+        .then(just(Token::As).ignore_then(string_lit.clone()).or_not())
         .map(|(mut drill_ref, label)| {
             drill_ref.label = label;
             GroupItem::DrillPathRef(drill_ref)
@@ -1032,64 +1073,53 @@ where
         .labelled("group item");
 
     // Parse group block: group { ... }
-    let group_block = just(Token::Group)
-        .ignore_then(
-            group_item
-                .map_with(|g, e| Spanned::new(g, to_span(e.span())))
-                .repeated()
-                .collect::<Vec<_>>()
-                .delimited_by(just(Token::LBrace), just(Token::RBrace))
-        );
+    let group_block = just(Token::Group).ignore_then(
+        group_item
+            .map_with(|g, e| Spanned::new(g, to_span(e.span())))
+            .repeated()
+            .collect::<Vec<_>>()
+            .delimited_by(just(Token::LBrace), just(Token::RBrace)),
+    );
 
     // Parse inline measure: name = { expr } [as "Label"];
-    let inline_measure = ident.clone()
+    let inline_measure = ident
+        .clone()
         .then_ignore(just(Token::Eq))
-        .then(sql_expr.clone())
-        .then(
-            just(Token::As)
-                .ignore_then(string_lit.clone())
-                .or_not()
-        )
+        .then(sql_expr(ExprContext::Measure))
+        .then(just(Token::As).ignore_then(string_lit.clone()).or_not())
         .map(|((name, expr), label)| ShowItem::InlineMeasure { name, expr, label });
 
     // Parse measure with suffix: name.suffix [as "Label"];
-    let measure_with_suffix = ident.clone()
+    let measure_with_suffix = ident
+        .clone()
         .then_ignore(just(Token::Dot))
         .then(time_suffix)
-        .then(
-            just(Token::As)
-                .ignore_then(string_lit.clone())
-                .or_not()
-        )
-        .map(|((name, suffix), label)| ShowItem::MeasureWithSuffix { name, suffix, label });
+        .then(just(Token::As).ignore_then(string_lit.clone()).or_not())
+        .map(|((name, suffix), label)| ShowItem::MeasureWithSuffix {
+            name,
+            suffix,
+            label,
+        });
 
     // Parse basic measure: name [as "Label"];
-    let basic_measure = ident.clone()
-        .then(
-            just(Token::As)
-                .ignore_then(string_lit.clone())
-                .or_not()
-        )
+    let basic_measure = ident
+        .clone()
+        .then(just(Token::As).ignore_then(string_lit.clone()).or_not())
         .map(|(name, label)| ShowItem::Measure { name, label });
 
     // Parse show item (order matters: try inline first, then suffix, then basic)
-    let show_item = choice((
-        inline_measure,
-        measure_with_suffix,
-        basic_measure,
-    ))
-    .then_ignore(just(Token::Semicolon))
-    .labelled("show item");
+    let show_item = choice((inline_measure, measure_with_suffix, basic_measure))
+        .then_ignore(just(Token::Semicolon))
+        .labelled("show item");
 
     // Parse show block: show { ... }
-    let show_block = just(Token::Show)
-        .ignore_then(
-            show_item
-                .map_with(|s, e| Spanned::new(s, to_span(e.span())))
-                .repeated()
-                .collect::<Vec<_>>()
-                .delimited_by(just(Token::LBrace), just(Token::RBrace))
-        );
+    let show_block = just(Token::Show).ignore_then(
+        show_item
+            .map_with(|s, e| Spanned::new(s, to_span(e.span())))
+            .repeated()
+            .collect::<Vec<_>>()
+            .delimited_by(just(Token::LBrace), just(Token::RBrace)),
+    );
 
     // Parse sort direction
     let sort_direction = select! {
@@ -1098,7 +1128,8 @@ where
     };
 
     // Parse sort item: column.direction
-    let sort_item = ident.clone()
+    let sort_item = ident
+        .clone()
         .then_ignore(just(Token::Dot))
         .then(sort_direction)
         .map(|(column, direction)| SortItem { column, direction })
@@ -1111,7 +1142,7 @@ where
                 .map_with(|s, e| Spanned::new(s, to_span(e.span())))
                 .separated_by(just(Token::Comma))
                 .at_least(1)
-                .collect::<Vec<_>>()
+                .collect::<Vec<_>>(),
         )
         .then_ignore(just(Token::Semicolon));
 
@@ -1123,7 +1154,7 @@ where
         Period(Spanned<PeriodExpr>),
         Group(Vec<Spanned<GroupItem>>),
         Show(Vec<Spanned<ShowItem>>),
-        Filter(Spanned<SqlExpr>),
+        Filter(Spanned<Expr>),
         Sort(Vec<Spanned<SortItem>>),
         Limit(Spanned<u64>),
     }
@@ -1131,11 +1162,12 @@ where
     // Parse from clause: from table1, table2, ...;
     let report_from = just(Token::From)
         .ignore_then(
-            ident.clone()
+            ident
+                .clone()
                 .map_with(|n, e| Spanned::new(n, to_span(e.span())))
                 .separated_by(just(Token::Comma))
                 .at_least(1)
-                .collect::<Vec<_>>()
+                .collect::<Vec<_>>(),
         )
         .then_ignore(just(Token::Semicolon))
         .map(ReportPart::From);
@@ -1143,29 +1175,26 @@ where
     // Parse use_date clause: use_date col1, col2, ...;
     let report_use_date = just(Token::UseDate)
         .ignore_then(
-            ident.clone()
+            ident
+                .clone()
                 .map_with(|n, e| Spanned::new(n, to_span(e.span())))
                 .separated_by(just(Token::Comma))
                 .at_least(1)
-                .collect::<Vec<_>>()
+                .collect::<Vec<_>>(),
         )
         .then_ignore(just(Token::Semicolon))
         .map(ReportPart::UseDate);
 
     // Parse period clause: period expr;
     let report_period = just(Token::Period)
-        .ignore_then(
-            period_expr
-                .map_with(|p, e| Spanned::new(p, to_span(e.span())))
-        )
+        .ignore_then(period_expr.map_with(|p, e| Spanned::new(p, to_span(e.span()))))
         .then_ignore(just(Token::Semicolon))
         .map(ReportPart::Period);
 
     // Parse filter clause: filter { condition };
     let report_filter = just(Token::Filter)
         .ignore_then(
-            sql_expr.clone()
-                .map_with(|expr, e| Spanned::new(expr, to_span(e.span())))
+            sql_expr(ExprContext::Filter).map_with(|expr, e| Spanned::new(expr, to_span(e.span()))),
         )
         .then_ignore(just(Token::Semicolon))
         .map(ReportPart::Filter);
@@ -1175,9 +1204,10 @@ where
         .ignore_then(
             select! { Token::Number(s) => s }
                 .try_map(|s, span| {
-                    s.parse::<u64>().map_err(|_| Rich::custom(span, "invalid limit value"))
+                    s.parse::<u64>()
+                        .map_err(|_| Rich::custom(span, "invalid limit value"))
                 })
-                .map_with(|n, e| Spanned::new(n, to_span(e.span())))
+                .map_with(|n, e| Spanned::new(n, to_span(e.span()))),
         )
         .then_ignore(just(Token::Semicolon))
         .map(ReportPart::Limit);
@@ -1204,7 +1234,7 @@ where
             let mut period: Option<Spanned<PeriodExpr>> = None;
             let mut group: Vec<Spanned<GroupItem>> = Vec::new();
             let mut show: Vec<Spanned<ShowItem>> = Vec::new();
-            let mut filter: Option<Spanned<SqlExpr>> = None;
+            let mut filter: Option<Spanned<Expr>> = None;
             let mut sort: Vec<Spanned<SortItem>> = Vec::new();
             let mut limit: Option<Spanned<u64>> = None;
 
@@ -1252,12 +1282,9 @@ where
                 }
             }
 
-            let from = from.ok_or_else(|| {
-                Rich::custom(span, "report requires from clause")
-            })?;
-            let use_date = use_date.ok_or_else(|| {
-                Rich::custom(span, "report requires use_date clause")
-            })?;
+            let from = from.ok_or_else(|| Rich::custom(span, "report requires from clause"))?;
+            let use_date =
+                use_date.ok_or_else(|| Rich::custom(span, "report requires use_date clause"))?;
 
             Ok((from, use_date, period, group, show, filter, sort, limit))
         });
@@ -1265,15 +1292,13 @@ where
     // report name { ... }
     let report = just(Token::Report)
         .ignore_then(
-            ident.clone()
-                .map_with(|n, e| Spanned::new(n, to_span(e.span())))
+            ident
+                .clone()
+                .map_with(|n, e| Spanned::new(n, to_span(e.span()))),
         )
-        .then(
-            report_body
-                .delimited_by(just(Token::LBrace), just(Token::RBrace))
-        )
-        .map(|(name, (from, use_date, period, group, show, filter, sort, limit))| {
-            Report {
+        .then(report_body.delimited_by(just(Token::LBrace), just(Token::RBrace)))
+        .map(
+            |(name, (from, use_date, period, group, show, filter, sort, limit))| Report {
                 name,
                 from,
                 use_date,
@@ -1283,8 +1308,8 @@ where
                 filter,
                 sort,
                 limit,
-            }
-        });
+            },
+        );
 
     // ==========================================================================
     // Top-level items
@@ -1301,12 +1326,12 @@ where
 
     // The model is an optional defaults block followed by items
     // Parse optional defaults first (must come before all items)
-    let model = defaults.or_not()
+    let model = defaults
+        .or_not()
         .then(
-            item
-                .map_with(|i, e| Spanned::new(i, to_span(e.span())))
+            item.map_with(|i, e| Spanned::new(i, to_span(e.span())))
                 .repeated()
-                .collect::<Vec<_>>()
+                .collect::<Vec<_>>(),
         )
         .map(|(defaults, items)| Model { defaults, items });
 
@@ -1610,14 +1635,13 @@ mod tests {
 
         match &model.items[0].value {
             Item::Table(table) => {
-                let check_inline = |idx: usize, expected: DataType| {
-                    match &table.slicers[idx].value.kind.value {
+                let check_inline =
+                    |idx: usize, expected: DataType| match &table.slicers[idx].value.kind.value {
                         SlicerKind::Inline { data_type } => {
                             assert_eq!(*data_type, expected)
                         }
                         _ => panic!("Expected Inline slicer"),
-                    }
-                };
+                    };
                 check_inline(0, DataType::String);
                 check_inline(1, DataType::Int);
                 check_inline(2, DataType::Bool);
@@ -1839,7 +1863,10 @@ mod tests {
                         assert_eq!(phys.grain_mappings[1].value.level.value, GrainLevel::Week);
                         assert_eq!(phys.grain_mappings[1].value.column.value, "week_start_date");
                         assert_eq!(phys.grain_mappings[2].value.level.value, GrainLevel::Month);
-                        assert_eq!(phys.grain_mappings[2].value.column.value, "month_start_date");
+                        assert_eq!(
+                            phys.grain_mappings[2].value.column.value,
+                            "month_start_date"
+                        );
 
                         // Check drill_path
                         assert_eq!(phys.drill_paths.len(), 1);
@@ -2044,25 +2071,23 @@ mod tests {
 
         assert_eq!(model.items.len(), 1);
         match &model.items[0].value {
-            Item::Calendar(cal) => {
-                match &cal.body.value {
-                    CalendarBody::Generated(gen) => {
-                        assert_eq!(gen.base_grain.value, GrainLevel::Month);
-                        match &gen.range.as_ref().unwrap().value {
-                            CalendarRange::Explicit { start, end } => {
-                                assert_eq!(start.value.year, 2024);
-                                assert_eq!(start.value.month, 1);
-                                assert_eq!(start.value.day, 1);
-                                assert_eq!(end.value.year, 2024);
-                                assert_eq!(end.value.month, 12);
-                                assert_eq!(end.value.day, 31);
-                            }
-                            _ => panic!("Expected Explicit range"),
+            Item::Calendar(cal) => match &cal.body.value {
+                CalendarBody::Generated(gen) => {
+                    assert_eq!(gen.base_grain.value, GrainLevel::Month);
+                    match &gen.range.as_ref().unwrap().value {
+                        CalendarRange::Explicit { start, end } => {
+                            assert_eq!(start.value.year, 2024);
+                            assert_eq!(start.value.month, 1);
+                            assert_eq!(start.value.day, 1);
+                            assert_eq!(end.value.year, 2024);
+                            assert_eq!(end.value.month, 12);
+                            assert_eq!(end.value.day, 31);
                         }
+                        _ => panic!("Expected Explicit range"),
                     }
-                    _ => panic!("Expected Generated calendar"),
                 }
-            }
+                _ => panic!("Expected Generated calendar"),
+            },
             _ => panic!("Expected Calendar item"),
         }
     }
@@ -2298,7 +2323,10 @@ mod tests {
                 let m = &mb.measures[0].value;
                 assert_eq!(m.name.value, "safe_ratio");
                 assert!(m.null_handling.is_some());
-                assert_eq!(m.null_handling.as_ref().unwrap().value, NullHandling::CoalesceZero);
+                assert_eq!(
+                    m.null_handling.as_ref().unwrap().value,
+                    NullHandling::CoalesceZero
+                );
             }
             _ => panic!("Expected MeasureBlock"),
         }
@@ -2321,7 +2349,10 @@ mod tests {
                 assert_eq!(m.name.value, "safe_enterprise");
                 assert!(m.filter.is_some());
                 assert!(m.null_handling.is_some());
-                assert_eq!(m.null_handling.as_ref().unwrap().value, NullHandling::NullOnZero);
+                assert_eq!(
+                    m.null_handling.as_ref().unwrap().value,
+                    NullHandling::NullOnZero
+                );
             }
             _ => panic!("Expected MeasureBlock"),
         }
@@ -2506,7 +2537,11 @@ mod tests {
                     _ => panic!("Expected Measure"),
                 }
                 match &report.show[1].value {
-                    ShowItem::MeasureWithSuffix { name, suffix, label } => {
+                    ShowItem::MeasureWithSuffix {
+                        name,
+                        suffix,
+                        label,
+                    } => {
                         assert_eq!(name, "revenue");
                         assert_eq!(*suffix, TimeSuffix::YoyGrowth);
                         assert_eq!(label.as_deref(), Some("YoY Growth"));
@@ -2776,7 +2811,11 @@ mod tests {
                 assert_eq!(report.show.len(), 4);
 
                 match &report.show[0].value {
-                    ShowItem::MeasureWithSuffix { name, suffix, label } => {
+                    ShowItem::MeasureWithSuffix {
+                        name,
+                        suffix,
+                        label,
+                    } => {
                         assert_eq!(name, "revenue");
                         assert_eq!(*suffix, TimeSuffix::Ytd);
                         assert!(label.is_none());
@@ -2785,7 +2824,11 @@ mod tests {
                 }
 
                 match &report.show[1].value {
-                    ShowItem::MeasureWithSuffix { name, suffix, label } => {
+                    ShowItem::MeasureWithSuffix {
+                        name,
+                        suffix,
+                        label,
+                    } => {
                         assert_eq!(name, "revenue");
                         assert_eq!(*suffix, TimeSuffix::PriorYear);
                         assert_eq!(label.as_deref(), Some("Last Year"));
@@ -2794,7 +2837,11 @@ mod tests {
                 }
 
                 match &report.show[2].value {
-                    ShowItem::MeasureWithSuffix { name, suffix, label } => {
+                    ShowItem::MeasureWithSuffix {
+                        name,
+                        suffix,
+                        label,
+                    } => {
                         assert_eq!(name, "revenue");
                         assert_eq!(*suffix, TimeSuffix::YoyGrowth);
                         assert!(label.is_none());
@@ -2803,7 +2850,11 @@ mod tests {
                 }
 
                 match &report.show[3].value {
-                    ShowItem::MeasureWithSuffix { name, suffix, label } => {
+                    ShowItem::MeasureWithSuffix {
+                        name,
+                        suffix,
+                        label,
+                    } => {
                         assert_eq!(name, "revenue");
                         assert_eq!(*suffix, TimeSuffix::Rolling12m);
                         assert_eq!(label.as_deref(), Some("12M Rolling"));
