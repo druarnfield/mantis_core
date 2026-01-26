@@ -79,6 +79,62 @@ impl<'a> CostEstimator<'a> {
                     memory_cost: input_cost.memory_cost,
                 }
             }
+            PhysicalPlan::HashJoin { left, right, .. } => {
+                // Estimate costs for both sides
+                let left_cost = self.estimate(left);
+                let right_cost = self.estimate(right);
+
+                // Estimate join cardinality using graph metadata
+                let rows_out = self.estimate_join_cardinality(left, right, &left_cost, &right_cost);
+
+                CostEstimate {
+                    rows_out,
+                    // CPU cost: scan both sides + build hash table + probe
+                    cpu_cost: left_cost.cpu_cost + right_cost.cpu_cost + (rows_out as f64),
+                    // IO cost: read both sides
+                    io_cost: left_cost.io_cost + right_cost.io_cost,
+                    // Memory cost: smaller side for hash table
+                    memory_cost: left_cost.rows_out.min(right_cost.rows_out) as f64,
+                }
+            }
+            PhysicalPlan::NestedLoopJoin { left, right, .. } => {
+                // Estimate costs for both sides
+                let left_cost = self.estimate(left);
+                let right_cost = self.estimate(right);
+
+                // Estimate join cardinality using graph metadata
+                let rows_out = self.estimate_join_cardinality(left, right, &left_cost, &right_cost);
+
+                CostEstimate {
+                    rows_out,
+                    // CPU cost: nested loop = left * right comparisons
+                    cpu_cost: left_cost.cpu_cost
+                        + (left_cost.rows_out as f64 * right_cost.rows_out as f64),
+                    // IO cost: read both sides
+                    io_cost: left_cost.io_cost + right_cost.io_cost,
+                    // Memory cost: no hash table needed
+                    memory_cost: 0.0,
+                }
+            }
+            PhysicalPlan::HashAggregate {
+                input, group_by, ..
+            } => {
+                // Estimate input cost
+                let input_cost = self.estimate(input);
+
+                // Estimate GROUP BY cardinality using graph metadata
+                let rows_out = self.estimate_group_cardinality(&input_cost, group_by);
+
+                CostEstimate {
+                    rows_out,
+                    // CPU cost: scan input + hash grouping
+                    cpu_cost: input_cost.cpu_cost + (input_cost.rows_out as f64),
+                    // IO cost unchanged
+                    io_cost: input_cost.io_cost,
+                    // Memory cost: hash table for groups
+                    memory_cost: rows_out as f64,
+                }
+            }
             _ => {
                 // For other plan types, use simple fallback for now
                 CostEstimate {
@@ -178,6 +234,99 @@ impl<'a> CostEstimator<'a> {
             }
             _ => None,
         }
+    }
+
+    /// Estimate join cardinality using relationship metadata from UnifiedGraph.
+    ///
+    /// Uses cardinality information from JOINS_TO edges to estimate output rows:
+    /// - 1:1 → max(left, right)
+    /// - 1:N → right (many side)
+    /// - N:1 → left (many side)
+    /// - N:N → (left * right) / 100 (reduced cross product)
+    fn estimate_join_cardinality(
+        &self,
+        left_plan: &PhysicalPlan,
+        right_plan: &PhysicalPlan,
+        left_cost: &CostEstimate,
+        right_cost: &CostEstimate,
+    ) -> usize {
+        // Extract table names from plans
+        let left_table = self.extract_table_name(left_plan);
+        let right_table = self.extract_table_name(right_plan);
+
+        if let (Some(left_table), Some(right_table)) = (left_table, right_table) {
+            // Try to find join path in graph
+            if let Ok(path) = self.graph.find_path(&left_table, &right_table) {
+                if let Some(step) = path.steps.first() {
+                    // Parse cardinality and apply formula
+                    return match step.cardinality.as_str() {
+                        "1:1" => left_cost.rows_out.max(right_cost.rows_out),
+                        "1:N" => right_cost.rows_out, // Many side
+                        "N:1" => left_cost.rows_out,  // Many side
+                        "N:N" => {
+                            // Many-to-many: reduced cross product
+                            ((left_cost.rows_out as f64 * right_cost.rows_out as f64) / 100.0)
+                                as usize
+                        }
+                        _ => left_cost.rows_out.max(right_cost.rows_out), // Unknown: conservative
+                    };
+                }
+            }
+        }
+
+        // Fallback: conservative estimate
+        left_cost.rows_out.max(right_cost.rows_out)
+    }
+
+    /// Extract table name from a physical plan.
+    ///
+    /// Recursively searches for the base table in the plan tree.
+    fn extract_table_name(&self, plan: &PhysicalPlan) -> Option<String> {
+        match plan {
+            PhysicalPlan::TableScan { table, .. } => Some(table.clone()),
+            PhysicalPlan::Filter { input, .. } => self.extract_table_name(input),
+            PhysicalPlan::HashJoin { left, .. } => self.extract_table_name(left),
+            PhysicalPlan::NestedLoopJoin { left, .. } => self.extract_table_name(left),
+            PhysicalPlan::HashAggregate { input, .. } => self.extract_table_name(input),
+            PhysicalPlan::Project { input, .. } => self.extract_table_name(input),
+            PhysicalPlan::Sort { input, .. } => self.extract_table_name(input),
+            PhysicalPlan::Limit { input, .. } => self.extract_table_name(input),
+        }
+    }
+
+    /// Estimate GROUP BY cardinality using column cardinality metadata.
+    ///
+    /// Uses column metadata to estimate distinct values:
+    /// - High cardinality: 50% of input rows
+    /// - Low cardinality: 10% of input rows
+    /// - Multiple columns: product of individual selectivities
+    fn estimate_group_cardinality(&self, input_cost: &CostEstimate, group_by: &[String]) -> usize {
+        if group_by.is_empty() {
+            // No grouping: single row output
+            return 1;
+        }
+
+        let mut selectivity = 1.0;
+
+        for col_qualified in group_by {
+            // Check if column is high or low cardinality
+            let col_selectivity =
+                if let Ok(is_high_card) = self.graph.is_high_cardinality(col_qualified) {
+                    if is_high_card {
+                        0.5 // High cardinality: 50% of rows
+                    } else {
+                        0.1 // Low cardinality: 10% of rows
+                    }
+                } else {
+                    0.3 // Default for unknown columns
+                };
+
+            // Multiple columns: multiply selectivities
+            selectivity *= col_selectivity;
+        }
+
+        // Apply selectivity to input rows
+        ((input_cost.rows_out as f64) * selectivity).max(1.0) as usize
     }
 
     pub fn select_best(&self, candidates: Vec<PhysicalPlan>) -> PlanResult<PhysicalPlan> {
