@@ -4,6 +4,9 @@ use crate::planner::join_optimizer::join_graph::JoinEdge;
 use crate::semantic::graph::{Cardinality, UnifiedGraph};
 
 pub struct CardinalityEstimator<'a> {
+    // TODO: Use graph to fetch actual column cardinality and statistics
+    // for more accurate selectivity estimates instead of current heuristics
+    #[allow(dead_code)]
     graph: &'a UnifiedGraph,
 }
 
