@@ -42,6 +42,7 @@ pub mod lowering;
 // pub mod lsp;  // Temporarily disabled - needs rebuilding with new DSL loader
 pub mod metadata;
 pub mod model;
+pub mod planner;
 pub mod semantic;
 pub mod sql;
 pub mod validation;
