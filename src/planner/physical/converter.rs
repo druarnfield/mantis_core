@@ -6,16 +6,6 @@ use crate::planner::physical::{PhysicalPlan, TableScanStrategy};
 use crate::planner::{PlanError, PlanResult};
 use crate::semantic::graph::UnifiedGraph;
 
-/// Format a projection item as a column reference
-fn format_projection_item(item: &crate::planner::logical::ProjectionItem) -> String {
-    use crate::planner::logical::ProjectionItem;
-    match item {
-        ProjectionItem::Column(col) => format!("{}.{}", col.entity, col.column),
-        ProjectionItem::Measure(m) => format!("{}.{}", m.entity, m.measure),
-        ProjectionItem::Expr { alias, .. } => alias.clone().unwrap_or_else(|| "expr".to_string()),
-    }
-}
-
 pub struct PhysicalConverter<'a> {
     graph: &'a UnifiedGraph,
     config: &'a crate::planner::physical::PhysicalPlannerConfig,
@@ -151,6 +141,11 @@ impl<'a> PhysicalConverter<'a> {
 
         // Select strategy based on config
         let strategy = optimizer.select_strategy(&table_vec);
+
+        println!(
+            "[CONVERTER] Using strategy {:?} for {} tables",
+            strategy, table_count
+        );
 
         // Get optimized join orders based on selected strategy
         let logical_candidates = match strategy {
@@ -362,11 +357,7 @@ impl<'a> PhysicalConverter<'a> {
                     .iter()
                     .map(|col| format!("{}.{}", col.entity, col.column))
                     .collect(),
-                aggregates: agg
-                    .measures
-                    .iter()
-                    .map(|m| format!("{}.{}", m.entity, m.measure))
-                    .collect(),
+                aggregates: agg.measures.clone(),
             })
             .collect())
     }
@@ -380,11 +371,7 @@ impl<'a> PhysicalConverter<'a> {
             .into_iter()
             .map(|input| PhysicalPlan::Project {
                 input: Box::new(input),
-                columns: proj
-                    .projections
-                    .iter()
-                    .map(format_projection_item)
-                    .collect(),
+                projections: proj.projections.clone(),
             })
             .collect())
     }

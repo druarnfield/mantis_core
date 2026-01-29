@@ -2,8 +2,21 @@
 
 use crate::model::expr::Expr as ModelExpr;
 use crate::planner::expr_converter::{ExprConverter, QueryContext};
-use crate::sql::expr::col;
+use crate::planner::logical::{ExpandedMeasure, ProjectionItem};
+use crate::sql::expr::{col, table_col, Expr as SqlExpr};
 use crate::sql::query::{OrderByExpr, Query, SelectExpr, SortDir, TableRef};
+
+/// Parse a column reference string that may contain a table prefix (e.g., "sales.revenue")
+/// and return the appropriate SQL expression.
+fn parse_column_ref(column_ref: &str) -> SqlExpr {
+    if let Some(dot_pos) = column_ref.find('.') {
+        let table = &column_ref[..dot_pos];
+        let column = &column_ref[dot_pos + 1..];
+        table_col(table, column)
+    } else {
+        col(column_ref)
+    }
+}
 
 /// Physical execution plan node
 #[derive(Debug, Clone, PartialEq)]
@@ -41,7 +54,7 @@ pub enum PhysicalPlan {
     HashAggregate {
         input: Box<PhysicalPlan>,
         group_by: Vec<String>,
-        aggregates: Vec<String>,
+        aggregates: Vec<ExpandedMeasure>,
     },
 
     /// Sort operation
@@ -53,7 +66,7 @@ pub enum PhysicalPlan {
     /// Projection
     Project {
         input: Box<PhysicalPlan>,
-        columns: Vec<String>,
+        projections: Vec<ProjectionItem>,
     },
 
     /// Limit
@@ -136,9 +149,9 @@ impl PhysicalPlan {
         let conditions: Vec<Expr> = on
             .iter()
             .map(|(left_col, right_col)| Expr::BinaryOp {
-                left: Box::new(col(left_col)),
+                left: Box::new(parse_column_ref(left_col)),
                 op: BinaryOperator::Eq,
-                right: Box::new(col(right_col)),
+                right: Box::new(parse_column_ref(right_col)),
             })
             .collect();
 
@@ -177,12 +190,32 @@ impl PhysicalPlan {
                 query = query.filter(sql_predicate);
                 query
             }
-            PhysicalPlan::Project { input, columns } => {
+            PhysicalPlan::Project { input, projections } => {
                 let query = input.to_query();
-                // Convert column names to SelectExpr
-                let select_exprs: Vec<SelectExpr> = columns
+                let context = self.extract_query_context();
+
+                let select_exprs: Vec<SelectExpr> = projections
                     .iter()
-                    .map(|column| SelectExpr::new(col(column)))
+                    .map(|item| match item {
+                        ProjectionItem::Column(col) => {
+                            let expr = table_col(&col.entity, &col.column);
+                            SelectExpr::new(expr)
+                        }
+                        ProjectionItem::Measure(m) => {
+                            let sql_expr = ExprConverter::convert(&m.expr, &context)
+                                .expect("Failed to convert measure expression");
+                            SelectExpr::new(sql_expr).with_alias(&m.name)
+                        }
+                        ProjectionItem::Expr { expr, alias } => {
+                            let sql_expr = ExprConverter::convert(expr, &context)
+                                .expect("Failed to convert expression");
+                            let mut se = SelectExpr::new(sql_expr);
+                            if let Some(a) = alias {
+                                se = se.with_alias(a);
+                            }
+                            se
+                        }
+                    })
                     .collect();
                 query.select(select_exprs)
             }
@@ -192,7 +225,7 @@ impl PhysicalPlan {
                 let order_exprs: Vec<OrderByExpr> = keys
                     .iter()
                     .map(|key| {
-                        let expr = col(&key.column);
+                        let expr = parse_column_ref(&key.column);
                         OrderByExpr {
                             expr,
                             dir: Some(if key.ascending {
@@ -213,16 +246,27 @@ impl PhysicalPlan {
                 aggregates,
             } => {
                 let mut query = input.to_query();
-                // Set GROUP BY
-                let group_exprs: Vec<_> = group_by.iter().map(|column| col(column)).collect();
+
+                // GROUP BY
+                let group_exprs: Vec<_> = group_by
+                    .iter()
+                    .map(|column| parse_column_ref(column))
+                    .collect();
                 if !group_exprs.is_empty() {
                     query = query.group_by(group_exprs);
                 }
-                // Add aggregates to SELECT list
+
+                // SELECT: convert ExpandedMeasure.expr to SQL with alias
+                let context = self.extract_query_context();
                 let agg_exprs: Vec<SelectExpr> = aggregates
                     .iter()
-                    .map(|column| SelectExpr::new(col(column)))
+                    .map(|m| {
+                        let sql_expr = ExprConverter::convert(&m.expr, &context)
+                            .expect("Failed to convert measure expression");
+                        SelectExpr::new(sql_expr).with_alias(&m.name)
+                    })
                     .collect();
+
                 if !agg_exprs.is_empty() {
                     query = query.select(agg_exprs);
                 }
