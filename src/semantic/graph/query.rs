@@ -36,6 +36,9 @@ pub enum QueryError {
         to: String,
         reason: String,
     },
+
+    #[error("Invalid expression for {measure}: {reason}")]
+    InvalidExpression { measure: String, reason: String },
 }
 
 /// Result type for query operations.
