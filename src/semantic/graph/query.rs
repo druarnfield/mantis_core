@@ -7,6 +7,10 @@
 //! - Calendar queries: find time dimensions
 
 use super::{GraphEdge, GraphNode, UnifiedGraph};
+use crate::dsl::Span;
+use crate::model::expr::Expr;
+use crate::model::expr_parser::parse_sql_expr;
+use crate::model::expr_validation::ExprContext;
 use petgraph::graph::NodeIndex;
 use petgraph::visit::EdgeRef;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -114,6 +118,74 @@ pub struct JoinStep {
 
     /// The cardinality of the join.
     pub cardinality: String,
+}
+
+/// Resolve all AtomRef in an expression to qualified Column references.
+pub fn resolve_atom_refs(expr: Expr, entity: &str) -> QueryResult<Expr> {
+    match expr {
+        Expr::AtomRef(atom_name) => Ok(Expr::Column {
+            entity: Some(entity.to_string()),
+            column: atom_name,
+        }),
+
+        Expr::Column { .. } => Ok(expr),
+        Expr::Literal(_) => Ok(expr),
+
+        Expr::Function { func, args } => {
+            let resolved_args: Result<Vec<_>, _> = args
+                .into_iter()
+                .map(|arg| resolve_atom_refs(arg, entity))
+                .collect();
+            Ok(Expr::Function {
+                func,
+                args: resolved_args?,
+            })
+        }
+
+        Expr::BinaryOp { left, op, right } => Ok(Expr::BinaryOp {
+            left: Box::new(resolve_atom_refs(*left, entity)?),
+            op,
+            right: Box::new(resolve_atom_refs(*right, entity)?),
+        }),
+
+        Expr::UnaryOp { op, expr: inner } => Ok(Expr::UnaryOp {
+            op,
+            expr: Box::new(resolve_atom_refs(*inner, entity)?),
+        }),
+
+        Expr::Case {
+            conditions,
+            else_expr,
+        } => {
+            let resolved_conditions: Result<Vec<_>, _> = conditions
+                .into_iter()
+                .map(|(cond, result)| {
+                    Ok((
+                        resolve_atom_refs(cond, entity)?,
+                        resolve_atom_refs(result, entity)?,
+                    ))
+                })
+                .collect();
+
+            let resolved_else = match else_expr {
+                Some(e) => Some(Box::new(resolve_atom_refs(*e, entity)?)),
+                None => None,
+            };
+
+            Ok(Expr::Case {
+                conditions: resolved_conditions?,
+                else_expr: resolved_else,
+            })
+        }
+
+        Expr::Cast {
+            expr: inner,
+            data_type,
+        } => Ok(Expr::Cast {
+            expr: Box::new(resolve_atom_refs(*inner, entity)?),
+            data_type,
+        }),
+    }
 }
 
 impl UnifiedGraph {
@@ -604,5 +676,56 @@ impl UnifiedGraph {
         } else {
             Err(QueryError::EntityNotFound(entity_name.to_string()))
         }
+    }
+
+    // ========================================================================
+    // Measure Expansion Methods
+    // ========================================================================
+
+    /// Expand a measure to its fully resolved expression.
+    ///
+    /// 1. Looks up MeasureNode by "entity.measure"
+    /// 2. Parses the expression string
+    /// 3. Resolves @atom references to qualified columns
+    ///
+    /// # Example
+    /// ```ignore
+    /// let expr = graph.expand_measure("sales", "revenue")?;
+    /// // Returns Expr with @amount resolved to sales.amount
+    /// ```
+    pub fn expand_measure(&self, entity: &str, measure: &str) -> QueryResult<Expr> {
+        let qualified = format!("{}.{}", entity, measure);
+
+        // 1. Look up measure
+        let measure_idx = self
+            .measure_index
+            .get(&qualified)
+            .ok_or_else(|| QueryError::MeasureNotFound(qualified.clone()))?;
+
+        let measure_node = match self.graph.node_weight(*measure_idx) {
+            Some(GraphNode::Measure(m)) => m,
+            _ => return Err(QueryError::MeasureNotFound(qualified)),
+        };
+
+        // 2. Parse expression
+        let expr_str =
+            measure_node
+                .expression
+                .as_ref()
+                .ok_or_else(|| QueryError::InvalidExpression {
+                    measure: qualified.clone(),
+                    reason: "measure has no expression".to_string(),
+                })?;
+
+        let span: Span = 0..0;
+        let expr = parse_sql_expr(expr_str, span, ExprContext::Measure).map_err(|e| {
+            QueryError::InvalidExpression {
+                measure: qualified.clone(),
+                reason: e.to_string(),
+            }
+        })?;
+
+        // 3. Resolve atom refs
+        resolve_atom_refs(expr, entity)
     }
 }
