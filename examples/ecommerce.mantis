@@ -1,0 +1,108 @@
+// E-Commerce Analytics Model
+// A more complex model with multiple tables and measures
+
+calendar standard {
+    generate day+;
+    range infer;
+}
+
+// Orders fact table
+table orders {
+    source "warehouse.orders";
+    atoms {
+        order_total decimal;
+        shipping_cost decimal;
+        tax_amount decimal;
+        item_count int;
+    }
+    times { order_date -> standard.day; }
+    slicers {
+        customer_id int;
+        product_id int;
+        channel string;
+        status string;
+    }
+}
+
+// Products dimension
+table products {
+    source "warehouse.products";
+    atoms {
+        unit_price decimal;
+        unit_cost decimal;
+    }
+    slicers {
+        product_id int;
+        category string;
+        brand string;
+        sku string;
+    }
+}
+
+// Customers dimension
+table customers {
+    source "warehouse.customers";
+    atoms {
+        lifetime_value decimal;
+    }
+    slicers {
+        customer_id int;
+        segment string;
+        region string;
+        country string;
+    }
+}
+
+// Order measures
+measures orders {
+    gross_revenue = { sum(@order_total) };
+    net_revenue = { sum(@order_total - @shipping_cost - @tax_amount) };
+    total_shipping = { sum(@shipping_cost) };
+    total_tax = { sum(@tax_amount) };
+    order_count = { count(@order_total) };
+    avg_order_value = { avg(@order_total) };
+    total_items = { sum(@item_count) };
+}
+
+// Product measures
+measures products {
+    avg_price = { avg(@unit_price) };
+    avg_cost = { avg(@unit_cost) };
+}
+
+// Basic revenue report
+report daily_revenue {
+    from orders;
+    use_date order_date;
+    show {
+        gross_revenue;
+        net_revenue;
+        order_count;
+    }
+}
+
+// Top orders report
+report top_orders {
+    from orders;
+    use_date order_date;
+    show {
+        gross_revenue;
+        avg_order_value;
+        total_items;
+    }
+    sort gross_revenue.desc;
+    limit 50;
+}
+
+// Channel performance
+report channel_performance {
+    from orders;
+    use_date order_date;
+    show {
+        gross_revenue;
+        order_count;
+        avg_order_value;
+    }
+    sort order_count.desc;
+    limit 20;
+}

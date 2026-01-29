@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use mantis_core::model::{Attribute, DataType, Dimension, DimensionDrillPath};
+    use mantis::model::{Attribute, DataType, Dimension, DimensionDrillPath};
     use std::collections::HashMap;
 
     #[test]

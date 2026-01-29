@@ -1,0 +1,27 @@
+// Minimal Example
+// A simple Mantis model
+
+calendar auto {
+    generate day+;
+    range infer;
+}
+
+table events {
+    source "events";
+    atoms {
+        value decimal;
+    }
+    times { event_date -> auto.day; }
+}
+
+measures events {
+    total = { sum(@value) };
+    average = { avg(@value) };
+    event_count = { count(@value) };
+}
+
+report summary {
+    from events;
+    use_date event_date;
+    show { total; average; event_count; }
+}

@@ -162,12 +162,17 @@ where
             .then(sql_token.clone().repeated().collect::<Vec<_>>())
             .then(just(Token::RBrace).map_with(|_, e| to_span(e.span())))
             .try_map(move |((lbrace_span, tokens), rbrace_span), span| {
-                // Reconstruct SQL from tokens, joining with spaces
-                let sql = tokens
-                    .iter()
-                    .map(|(s, _)| s.as_str())
-                    .collect::<Vec<_>>()
-                    .join(" ");
+                // Reconstruct SQL from tokens, with smart spacing
+                // Don't add space after @ (for @atom references)
+                let mut sql = String::new();
+                let mut prev_was_at = false;
+                for (token_str, _) in &tokens {
+                    if !sql.is_empty() && !prev_was_at {
+                        sql.push(' ');
+                    }
+                    sql.push_str(token_str);
+                    prev_was_at = token_str == "@";
+                }
 
                 // Full span from LBrace to RBrace
                 let full_span = lbrace_span.start..rbrace_span.end;

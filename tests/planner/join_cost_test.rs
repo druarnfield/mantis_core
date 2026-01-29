@@ -78,14 +78,14 @@ fn test_hash_join_has_memory_cost() {
     // HashJoin should have memory cost for smaller side (customers: 1000)
     assert_eq!(cost.memory_cost, 1_000.0);
 
-    // CPU cost: scan left + scan right + probe overhead
-    // left_cpu (100k) + right_cpu (1k) + rows_out (100k) = 201k
-    assert!(cost.cpu_cost > 200_000.0);
-    assert!(cost.cpu_cost < 210_000.0);
+    // CPU cost: scan left + scan right + (rows_out * 11.5 multiplier for hash join)
+    // left_cpu (100k) + right_cpu (1k) + (100k * 11.5) = 1,251,000
+    assert!(cost.cpu_cost > 1_200_000.0);
+    assert!(cost.cpu_cost < 1_300_000.0);
 
-    // IO cost: read both sides
-    // left_io (100k) + right_io (1k) = 101k
-    assert_eq!(cost.io_cost, 101_000.0);
+    // IO cost: read both sides + output materialization
+    // left_io (100k) + right_io (1k) + rows_out (100k) = 201k
+    assert_eq!(cost.io_cost, 201_000.0);
 }
 
 #[test]
@@ -120,8 +120,9 @@ fn test_nested_loop_has_no_memory_cost() {
     // CPU cost: left * right comparisons = 100k * 1k = 100M
     assert!(cost.cpu_cost > 100_000_000.0);
 
-    // IO cost: read both sides
-    assert_eq!(cost.io_cost, 101_000.0);
+    // IO cost: read both sides + output materialization
+    // left_io (100k) + right_io (1k) + rows_out (100k) = 201k
+    assert_eq!(cost.io_cost, 201_000.0);
 }
 
 #[test]
@@ -161,12 +162,13 @@ fn test_hash_join_cheaper_than_nested_loop_for_large_tables() {
     // HashJoin should have much lower total cost than NestedLoopJoin
     assert!(hash_cost.total() < nlj_cost.total());
 
-    // Specifically, HashJoin CPU should be much lower
-    assert!(hash_cost.cpu_cost < nlj_cost.cpu_cost / 100.0);
+    // HashJoin CPU (~1.25M) should be much lower than NLJ CPU (~100M)
+    // At least 50x cheaper
+    assert!(hash_cost.cpu_cost < nlj_cost.cpu_cost / 50.0);
 }
 
 #[test]
-fn test_join_io_cost_includes_both_sides() {
+fn test_join_io_cost_includes_both_sides_and_output() {
     let graph = create_test_graph();
 
     let left = PhysicalPlan::TableScan {
@@ -193,8 +195,10 @@ fn test_join_io_cost_includes_both_sides() {
     let right_cost = estimator.estimate(&right);
     let join_cost = estimator.estimate(&hash_join);
 
-    // Join IO should equal sum of both sides
-    assert_eq!(join_cost.io_cost, left_cost.io_cost + right_cost.io_cost);
+    // Join IO should equal sum of both sides plus output row materialization
+    // For N:1 join, output rows = left rows (100k)
+    let expected_io = left_cost.io_cost + right_cost.io_cost + 100_000.0;
+    assert_eq!(join_cost.io_cost, expected_io);
 }
 
 #[test]

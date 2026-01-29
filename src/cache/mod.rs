@@ -53,7 +53,7 @@
 //! # Example
 //!
 //! ```no_run
-//! use mantis_core::cache::{MetadataCache, GraphCache, GraphCacheConfig};
+//! use mantis::cache::{MetadataCache, GraphCache, GraphCacheConfig};
 //! use std::time::Duration;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {

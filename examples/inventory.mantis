@@ -1,0 +1,84 @@
+// Inventory Management Model
+// Tracks stock levels, movements, and valuations
+
+calendar daily {
+    generate day+;
+    range infer;
+}
+
+table inventory_movements {
+    source "ops.inventory_movements";
+    atoms {
+        quantity_change int;
+        unit_cost decimal;
+        total_value decimal;
+    }
+    times { movement_date -> daily.day; }
+    slicers {
+        warehouse_id int;
+        product_sku string;
+        movement_type string;
+        reason_code string;
+    }
+}
+
+table stock_levels {
+    source "ops.stock_levels";
+    atoms {
+        quantity_on_hand int;
+        quantity_reserved int;
+        quantity_available int;
+        reorder_point int;
+    }
+    times { snapshot_date -> daily.day; }
+    slicers {
+        warehouse_id int;
+        product_sku string;
+        bin_location string;
+    }
+}
+
+measures inventory_movements {
+    net_change = { sum(@quantity_change) };
+    total_cost = { sum(@total_value) };
+    avg_unit_cost = { avg(@unit_cost) };
+    movement_count = { count(@quantity_change) };
+}
+
+measures stock_levels {
+    total_on_hand = { sum(@quantity_on_hand) };
+    total_reserved = { sum(@quantity_reserved) };
+    total_available = { sum(@quantity_available) };
+}
+
+report inventory_summary {
+    from inventory_movements;
+    use_date movement_date;
+    show {
+        net_change;
+        total_cost;
+        avg_unit_cost;
+        movement_count;
+    }
+}
+
+report stock_status {
+    from stock_levels;
+    use_date snapshot_date;
+    show {
+        total_on_hand;
+        total_reserved;
+        total_available;
+    }
+}
+
+report cost_analysis {
+    from inventory_movements;
+    use_date movement_date;
+    show {
+        total_cost;
+        avg_unit_cost;
+    }
+    sort total_cost.desc;
+    limit 100;
+}

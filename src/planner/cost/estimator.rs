@@ -106,9 +106,14 @@ impl<'a> CostEstimator<'a> {
                 let cost = CostEstimate {
                     rows_out,
                     // CPU cost: scan both sides + build hash table + probe
-                    cpu_cost: left_cost.cpu_cost + right_cost.cpu_cost + (rows_out as f64),
-                    // IO cost: read both sides
-                    io_cost: left_cost.io_cost + right_cost.io_cost,
+                    // IMPORTANT: Use multiplier to heavily penalize large intermediate results
+                    // Large intermediates (10M rows) are far more expensive than small (100K)
+                    // because they spill to disk and become expensive inputs to future joins
+                    cpu_cost: left_cost.cpu_cost + right_cost.cpu_cost + (rows_out as f64 * 11.5),
+                    // IO cost: read both sides + materialize output
+                    // CRITICAL: Add output rows to model that large intermediates must be
+                    // written to disk and read back for subsequent operations
+                    io_cost: left_cost.io_cost + right_cost.io_cost + (rows_out as f64),
                     // Memory cost: smaller side for hash table
                     memory_cost: left_cost.rows_out.min(right_cost.rows_out) as f64,
                 };
@@ -134,8 +139,9 @@ impl<'a> CostEstimator<'a> {
                     // CPU cost: nested loop = left * right comparisons
                     cpu_cost: left_cost.cpu_cost
                         + (left_cost.rows_out as f64 * right_cost.rows_out as f64),
-                    // IO cost: read both sides
-                    io_cost: left_cost.io_cost + right_cost.io_cost,
+                    // IO cost: read both sides + materialize output
+                    // CRITICAL: Add output rows to model materialization cost
+                    io_cost: left_cost.io_cost + right_cost.io_cost + (rows_out as f64),
                     // Memory cost: no hash table needed
                     memory_cost: 0.0,
                 };

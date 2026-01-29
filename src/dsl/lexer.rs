@@ -227,6 +227,16 @@ pub enum Token<'src> {
     Minus,
     /// `:`
     Colon,
+    /// `>`
+    Gt,
+    /// `<`
+    Lt,
+    /// `>=`
+    Gte,
+    /// `<=`
+    Lte,
+    /// `!=`
+    Ne,
 }
 
 impl<'src> std::fmt::Display for Token<'src> {
@@ -399,6 +409,11 @@ impl<'src> std::fmt::Display for Token<'src> {
             Token::Slash => write!(f, "/"),
             Token::Minus => write!(f, "-"),
             Token::Colon => write!(f, ":"),
+            Token::Gt => write!(f, ">"),
+            Token::Lt => write!(f, "<"),
+            Token::Gte => write!(f, ">="),
+            Token::Lte => write!(f, "<="),
+            Token::Ne => write!(f, "!="),
         }
     }
 }
@@ -581,6 +596,9 @@ pub fn lexer<'src>(
     // Symbols (multi-char first, then single-char)
     let symbol = choice((
         just("->").to(Token::Arrow),
+        just(">=").to(Token::Gte),
+        just("<=").to(Token::Lte),
+        just("!=").to(Token::Ne),
         just('{').to(Token::LBrace),
         just('}').to(Token::RBrace),
         just('(').to(Token::LParen),
@@ -597,6 +615,8 @@ pub fn lexer<'src>(
         just('/').to(Token::Slash),
         just('-').to(Token::Minus),
         just(':').to(Token::Colon),
+        just('>').to(Token::Gt),
+        just('<').to(Token::Lt),
     ));
 
     // Single-line comments: // ... until newline
@@ -709,7 +729,8 @@ mod tests {
 
     #[test]
     fn test_lex_grain_keywords() {
-        let source = "minute hour day week month quarter year fiscal_month fiscal_quarter fiscal_year";
+        let source =
+            "minute hour day week month quarter year fiscal_month fiscal_quarter fiscal_year";
         let result = lex(source).expect("lexing should succeed");
         let tokens = tokens_only(result);
 
@@ -752,7 +773,8 @@ mod tests {
 
     #[test]
     fn test_lex_month_keywords() {
-        let source = "January February March April May June July August September October November December";
+        let source =
+            "January February March April May June July August September October November December";
         let result = lex(source).expect("lexing should succeed");
         let tokens = tokens_only(result);
 
@@ -981,7 +1003,11 @@ mod tests {
 
         assert_eq!(
             tokens,
-            vec![Token::FiscalYearStart, Token::WeekStart, Token::DecimalPlaces,]
+            vec![
+                Token::FiscalYearStart,
+                Token::WeekStart,
+                Token::DecimalPlaces,
+            ]
         );
     }
 

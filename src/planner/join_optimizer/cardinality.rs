@@ -16,6 +16,11 @@ impl<'a> CardinalityEstimator<'a> {
     }
 
     /// Estimate output rows for a join.
+    ///
+    /// IMPORTANT: The cardinality represents the relationship direction as defined
+    /// in the schema, but we may be joining in either direction. For N:1 relationships:
+    /// - If defined as A→B (N:1), joining A⋈B or B⋈A both preserve the "many" side (A)
+    /// - The output is always dominated by the "many" side
     pub fn estimate_join_output(
         &self,
         left_rows: usize,
@@ -23,11 +28,18 @@ impl<'a> CardinalityEstimator<'a> {
         join_info: &JoinEdge,
     ) -> usize {
         match join_info.cardinality {
-            Cardinality::OneToOne => left_rows.min(right_rows),
-            Cardinality::OneToMany => right_rows,
-            Cardinality::ManyToOne => left_rows,
+            Cardinality::OneToOne => {
+                // 1:1 - output is minimum of both sides
+                left_rows.min(right_rows)
+            }
+            Cardinality::OneToMany | Cardinality::ManyToOne => {
+                // N:1 or 1:N - output is dominated by the "many" side
+                // Since we don't know which side is "many" from just the cardinality,
+                // we use the larger input as a heuristic (the "many" side is usually larger)
+                left_rows.max(right_rows)
+            }
             Cardinality::ManyToMany => {
-                // For now, use simple heuristic
+                // N:M - use selectivity heuristic
                 // TODO: Use join column cardinality
                 (left_rows as f64 * (right_rows as f64).sqrt()) as usize
             }

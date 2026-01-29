@@ -1,0 +1,262 @@
+// Retail Analytics Model
+// Demonstrates dimensions, FK joins, drill paths, and complex measures
+
+calendar standard {
+    generate day+;
+    range infer;
+
+    drill_path time_hierarchy { year -> quarter -> month -> day };
+}
+
+// Customer dimension with drill path
+dimension customers {
+    source "warehouse.dim_customers";
+    key customer_id;
+
+    attributes {
+        customer_name string;
+        email string;
+        phone string;
+        segment string;
+        tier string;
+        region string;
+        country string;
+        city string;
+        signup_date date;
+    }
+
+    drill_path geography { country -> region -> city };
+    drill_path customer_segments { segment -> tier };
+}
+
+// Product dimension with hierarchy
+dimension products {
+    source "warehouse.dim_products";
+    key product_id;
+
+    attributes {
+        product_name string;
+        sku string;
+        category string;
+        subcategory string;
+        brand string;
+        supplier string;
+        unit_price decimal;
+        unit_cost decimal;
+    }
+
+    drill_path product_hierarchy { category -> subcategory -> brand };
+}
+
+// Store dimension
+dimension stores {
+    source "warehouse.dim_stores";
+    key store_id;
+
+    attributes {
+        store_name string;
+        store_type string;
+        region string;
+        district string;
+        city string;
+        state string;
+        country string;
+        square_footage int;
+        open_date date;
+    }
+
+    drill_path store_geography { country -> state -> city };
+    drill_path store_hierarchy { region -> district -> store_name };
+}
+
+// Sales fact table with FK joins to dimensions
+table sales {
+    source "warehouse.fact_sales";
+
+    atoms {
+        quantity int;
+        unit_price decimal;
+        discount_amount decimal;
+        tax_amount decimal;
+        shipping_cost decimal;
+        line_total decimal;
+    }
+
+    times {
+        sale_date -> standard.day;
+    }
+
+    slicers {
+        // FK joins to dimensions
+        customer_id -> customers.customer_id;
+        product_id -> products.product_id;
+        store_id -> stores.store_id;
+
+        // Via slicers - expose dimension attributes through FK
+        customer_segment via customer_id;
+        product_category via product_id;
+        store_region via store_id;
+
+        // Inline slicers
+        order_id int;
+        line_number int;
+        channel string;
+        payment_method string;
+    }
+}
+
+// Sales measures with various aggregations
+measures sales {
+    // Basic revenue measures
+    gross_revenue = { sum(@line_total) };
+    net_revenue = { sum(@line_total - @discount_amount) };
+    total_discount = { sum(@discount_amount) };
+    total_tax = { sum(@tax_amount) };
+    total_shipping = { sum(@shipping_cost) };
+
+    // Quantity measures
+    units_sold = { sum(@quantity) };
+
+    // Calculated measures
+    avg_selling_price = { avg(@unit_price) };
+    avg_order_value = { avg(@line_total) };
+    avg_discount_pct = { avg(@discount_amount / @line_total * 100) };
+
+    // Count measures
+    order_count = { count(@line_total) };
+    line_count = { count(@quantity) };
+
+    // Conditional measures with filters (discount_amount is an atom)
+    discounted_revenue = { sum(@line_total) } where { @discount_amount > 0 };
+    high_value_revenue = { sum(@line_total) } where { @line_total > 100 };
+}
+
+// Returns fact table
+table returns {
+    source "warehouse.fact_returns";
+
+    atoms {
+        quantity_returned int;
+        refund_amount decimal;
+        restocking_fee decimal;
+    }
+
+    times {
+        return_date -> standard.day;
+    }
+
+    slicers {
+        customer_id -> customers.customer_id;
+        product_id -> products.product_id;
+        store_id -> stores.store_id;
+
+        original_order_id int;
+        return_reason string;
+    }
+}
+
+measures returns {
+    total_returns = { sum(@quantity_returned) };
+    refund_total = { sum(@refund_amount) };
+    restocking_fees = { sum(@restocking_fee) };
+    net_refund = { sum(@refund_amount - @restocking_fee) };
+    return_count = { count(@refund_amount) };
+}
+
+// Executive dashboard report
+report executive_dashboard {
+    from sales;
+    use_date sale_date;
+
+    group {
+        standard.time_hierarchy.month;
+    }
+
+    show {
+        gross_revenue;
+        net_revenue;
+        total_discount;
+        units_sold;
+        order_count;
+        avg_order_value;
+    }
+
+    sort gross_revenue.desc;
+    limit 12;
+}
+
+// Channel performance report
+report channel_performance {
+    from sales;
+    use_date sale_date;
+
+    show {
+        gross_revenue;
+        discounted_revenue;
+        high_value_revenue;
+        order_count;
+        avg_order_value;
+    }
+
+    sort gross_revenue.desc;
+    limit 50;
+}
+
+// Product category analysis
+report category_analysis {
+    from sales;
+    use_date sale_date;
+
+    group {
+        products.product_hierarchy.category;
+    }
+
+    show {
+        gross_revenue;
+        units_sold;
+        avg_selling_price;
+        avg_discount_pct;
+    }
+
+    sort gross_revenue.desc;
+    limit 25;
+}
+
+// Customer segment analysis
+report customer_segments {
+    from sales;
+    use_date sale_date;
+
+    group {
+        customers.customer_segments.segment;
+    }
+
+    show {
+        gross_revenue;
+        order_count;
+        avg_order_value;
+    }
+
+    sort gross_revenue.desc;
+    limit 20;
+}
+
+// Regional sales report with geography drill
+report regional_sales {
+    from sales;
+    use_date sale_date;
+
+    group {
+        stores.store_geography.state;
+    }
+
+    show {
+        gross_revenue;
+        net_revenue;
+        units_sold;
+        order_count;
+    }
+
+    sort gross_revenue.desc;
+    limit 50;
+}

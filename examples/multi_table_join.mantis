@@ -1,0 +1,76 @@
+// Multi-Table Join Example
+// Demonstrates joins between fact and dimension tables
+
+calendar dates {
+    generate day+;
+    range infer;
+}
+
+// Products dimension
+table products {
+    source "warehouse.products";
+    atoms {
+        unit_price decimal;
+        unit_cost decimal;
+    }
+    slicers {
+        product_id int;
+        product_name string;
+        category string;
+    }
+}
+
+// Sales fact table with FK to products
+table sales {
+    source "warehouse.sales";
+    atoms {
+        quantity int;
+        amount decimal;
+        discount decimal;
+    }
+    times { sale_date -> dates.day; }
+    slicers {
+        order_id int;
+        // FK join to products dimension
+        product_id -> products.product_id;
+        customer_id int;
+    }
+}
+
+// Measures for sales
+measures sales {
+    revenue = { sum(@amount) };
+    total_quantity = { sum(@quantity) };
+    total_discount = { sum(@discount) };
+    avg_order_value = { avg(@amount) };
+}
+
+// Measures for products
+measures products {
+    avg_price = { avg(@unit_price) };
+    avg_cost = { avg(@unit_cost) };
+}
+
+// Single table report (no join)
+report sales_summary {
+    from sales;
+    use_date sale_date;
+    show {
+        revenue;
+        total_quantity;
+        avg_order_value;
+    }
+    limit 100;
+}
+
+// Multi-table report (should generate JOIN)
+report sales_with_products {
+    from sales, products;
+    use_date sale_date;
+    show {
+        revenue;
+        total_quantity;
+        avg_price;
+    }
+    limit 50;
+}

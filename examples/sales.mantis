@@ -1,0 +1,48 @@
+// Sales Analytics Model
+// A simple sales data model demonstrating basic Mantis DSL features
+
+calendar auto {
+    generate day+;
+    range infer;
+}
+
+table sales {
+    source "dbo.sales";
+    atoms {
+        amount decimal;
+        quantity int;
+        discount decimal;
+    }
+    times { sale_date -> auto.day; }
+    slicers {
+        region string;
+        product_id int;
+        customer_id int;
+    }
+}
+
+measures sales {
+    revenue = { sum(@amount) };
+    total_quantity = { sum(@quantity) };
+    avg_order_value = { avg(@amount) };
+    total_discount = { sum(@discount) };
+}
+
+report revenue_summary {
+    from sales;
+    use_date sale_date;
+    show {
+        revenue;
+        total_quantity;
+        avg_order_value;
+    }
+    limit 100;
+}
+
+report top_revenue {
+    from sales;
+    use_date sale_date;
+    show { revenue; }
+    sort revenue.desc;
+    limit 10;
+}

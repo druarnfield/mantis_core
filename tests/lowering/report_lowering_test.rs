@@ -1,7 +1,7 @@
-use mantis_core::dsl::ast;
-use mantis_core::dsl::span::{Span, Spanned};
-use mantis_core::lowering;
-use mantis_core::model::{GroupItem, ShowItem, TimeSuffix};
+use mantis::dsl::ast;
+use mantis::dsl::span::{Span, Spanned};
+use mantis::lowering;
+use mantis::model::{GroupItem, ShowItem, TimeSuffix};
 
 #[test]
 fn test_lower_report() {

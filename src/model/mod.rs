@@ -14,6 +14,7 @@ pub mod types;
 pub use calendar::{Calendar, CalendarBody, DrillPath, PhysicalCalendar};
 pub use defaults::Defaults;
 pub use dimension::{Attribute, Dimension, DimensionDrillPath};
+pub use expr::{BinaryOp, Expr, Func, Literal, UnaryOp};
 pub use expr_parser::{parse_sql_expr, ParseError, ParseResult};
 pub use expr_validation::{ExprContext, ValidationError};
 pub use measure::{Measure, MeasureBlock};

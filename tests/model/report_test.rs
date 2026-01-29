@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use mantis_core::model::{GroupItem, Report, ShowItem, TimeSuffix};
+    use mantis::model::{GroupItem, Report, ShowItem, TimeSuffix};
 
     #[test]
     fn test_report_with_drill_path_group() {

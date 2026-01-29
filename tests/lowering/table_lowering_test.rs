@@ -1,7 +1,8 @@
-use mantis_core::dsl::ast;
-use mantis_core::dsl::span::{Span, Spanned};
-use mantis_core::lowering;
-use mantis_core::model::{Slicer, Table};
+use mantis::dsl::ast;
+use mantis::dsl::span::{Span, Spanned};
+use mantis::lowering;
+use mantis::model::expr::{Expr, Func, ScalarFunc};
+use mantis::model::{Slicer, Table};
 
 #[test]
 fn test_lower_table_with_atoms() {
@@ -50,11 +51,20 @@ fn test_lower_table_with_atoms() {
 
     let atom = table.atoms.get("revenue").unwrap();
     assert_eq!(atom.name, "revenue");
-    assert_eq!(atom.data_type, mantis_core::model::AtomType::Decimal);
+    assert_eq!(atom.data_type, mantis::model::AtomType::Decimal);
 }
 
 #[test]
 fn test_lower_table_with_all_components() {
+    // Create a YEAR(order_date) function call expression
+    let year_expr = Expr::Function {
+        func: Func::Scalar(ScalarFunc::Year),
+        args: vec![Expr::Column {
+            entity: None,
+            column: "order_date".to_string(),
+        }],
+    };
+
     let ast = ast::Model {
         defaults: None,
         items: vec![Spanned {
@@ -141,10 +151,7 @@ fn test_lower_table_with_all_components() {
                             kind: Spanned {
                                 value: ast::SlicerKind::Calculated {
                                     data_type: ast::DataType::Int,
-                                    expr: ast::SqlExpr::new(
-                                        "YEAR(order_date)".to_string(),
-                                        Span::default(),
-                                    ),
+                                    expr: year_expr,
                                 },
                                 span: Span::default(),
                             },

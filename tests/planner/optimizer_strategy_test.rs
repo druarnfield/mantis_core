@@ -1,6 +1,6 @@
 // tests/planner/optimizer_strategy_test.rs
-use mantis_core::planner::physical::join_optimizer::*;
-use mantis_core::semantic::graph::UnifiedGraph;
+use mantis::planner::physical::join_optimizer::*;
+use mantis::semantic::graph::UnifiedGraph;
 
 #[test]
 fn test_strategy_selection_small_query() {

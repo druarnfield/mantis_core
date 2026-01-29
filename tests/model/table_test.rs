@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use mantis_core::model::{Atom, AtomType, GrainLevel, Slicer, Table, TimeBinding};
+    use mantis::model::{Atom, AtomType, GrainLevel, Slicer, Table, TimeBinding};
     use std::collections::HashMap;
 
     #[test]
@@ -93,7 +93,7 @@ mod tests {
 
     #[test]
     fn test_table_with_inline_slicer() {
-        use mantis_core::model::DataType;
+        use mantis::model::DataType;
 
         let mut slicers = HashMap::new();
         slicers.insert(
@@ -120,8 +120,15 @@ mod tests {
 
     #[test]
     fn test_table_with_calculated_slicer() {
-        use mantis_core::dsl::span::Span;
-        use mantis_core::model::{DataType, SqlExpr};
+        use mantis::model::expr::{BinaryOp, Expr};
+        use mantis::model::DataType;
+
+        // Create an expression: @revenue + @tax
+        let expr = Expr::BinaryOp {
+            left: Box::new(Expr::AtomRef("revenue".to_string())),
+            op: BinaryOp::Add,
+            right: Box::new(Expr::AtomRef("tax".to_string())),
+        };
 
         let mut slicers = HashMap::new();
         slicers.insert(
@@ -129,10 +136,7 @@ mod tests {
             Slicer::Calculated {
                 name: "total_amount".to_string(),
                 data_type: DataType::Decimal,
-                expr: SqlExpr {
-                    sql: "@revenue + @tax".to_string(),
-                    span: Span::new(0, 0),
-                },
+                expr,
             },
         );
 

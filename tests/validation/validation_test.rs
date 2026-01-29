@@ -1,6 +1,5 @@
-use mantis_core::dsl::span::Span;
-use mantis_core::model;
-use mantis_core::validation;
+use mantis::model;
+use mantis::validation;
 use std::collections::HashMap;
 
 #[test]
@@ -20,7 +19,7 @@ fn test_validate_empty_model() {
 
 #[test]
 fn test_detect_undefined_calendar_reference() {
-    use mantis_core::model::{GrainLevel, Table, TimeBinding};
+    use mantis::model::{GrainLevel, Table, TimeBinding};
 
     let mut times = HashMap::new();
     times.insert(
@@ -67,7 +66,7 @@ fn test_detect_undefined_calendar_reference() {
 
 #[test]
 fn test_detect_undefined_dimension_reference() {
-    use mantis_core::model::{Slicer, Table};
+    use mantis::model::{Slicer, Table};
 
     let mut slicers = HashMap::new();
     slicers.insert(
@@ -128,18 +127,23 @@ fn test_validation_error_display() {
 
 #[test]
 fn test_detect_circular_measure_dependency() {
-    use mantis_core::model::{Measure, MeasureBlock, SqlExpr};
+    use mantis::model::{BinaryOp, Expr, Literal, Measure, MeasureBlock, Table};
 
     let mut measures = HashMap::new();
 
     // Create circular dependency: a -> b -> a
+    // Use Column references which the validation will detect
     measures.insert(
         "a".to_string(),
         Measure {
             name: "a".to_string(),
-            expr: SqlExpr {
-                sql: "b + 1".to_string(), // References 'b'
-                span: Span::default(),
+            expr: Expr::BinaryOp {
+                left: Box::new(Expr::Column {
+                    entity: None,
+                    column: "b".to_string(), // References 'b'
+                }),
+                op: BinaryOp::Add,
+                right: Box::new(Expr::Literal(Literal::Int(1))),
             },
             filter: None,
             null_handling: None,
@@ -150,9 +154,13 @@ fn test_detect_circular_measure_dependency() {
         "b".to_string(),
         Measure {
             name: "b".to_string(),
-            expr: SqlExpr {
-                sql: "a * 2".to_string(), // References 'a'
-                span: Span::default(),
+            expr: Expr::BinaryOp {
+                left: Box::new(Expr::Column {
+                    entity: None,
+                    column: "a".to_string(), // References 'a'
+                }),
+                op: BinaryOp::Mul,
+                right: Box::new(Expr::Literal(Literal::Int(2))),
             },
             filter: None,
             null_handling: None,
@@ -164,6 +172,15 @@ fn test_detect_circular_measure_dependency() {
         measures,
     };
 
+    // Create the table that the measure block references
+    let table = Table {
+        name: "fact_sales".to_string(),
+        source: "dbo.fact_sales".to_string(),
+        atoms: HashMap::new(),
+        times: HashMap::new(),
+        slicers: HashMap::new(),
+    };
+
     let mut model = model::Model {
         defaults: None,
         calendars: HashMap::new(),
@@ -173,6 +190,7 @@ fn test_detect_circular_measure_dependency() {
         reports: HashMap::new(),
     };
 
+    model.tables.insert("fact_sales".to_string(), table);
     model
         .measures
         .insert("fact_sales".to_string(), measure_block);
@@ -190,7 +208,7 @@ fn test_detect_circular_measure_dependency() {
 
 #[test]
 fn test_no_circular_dependency_linear_chain() {
-    use mantis_core::model::{Measure, MeasureBlock, SqlExpr};
+    use mantis::model::{BinaryOp, Expr, Func, Literal, Measure, MeasureBlock, Table};
 
     let mut measures = HashMap::new();
 
@@ -199,9 +217,13 @@ fn test_no_circular_dependency_linear_chain() {
         "a".to_string(),
         Measure {
             name: "a".to_string(),
-            expr: SqlExpr {
-                sql: "b + 1".to_string(),
-                span: Span::default(),
+            expr: Expr::BinaryOp {
+                left: Box::new(Expr::Column {
+                    entity: None,
+                    column: "b".to_string(),
+                }),
+                op: BinaryOp::Add,
+                right: Box::new(Expr::Literal(Literal::Int(1))),
             },
             filter: None,
             null_handling: None,
@@ -212,9 +234,13 @@ fn test_no_circular_dependency_linear_chain() {
         "b".to_string(),
         Measure {
             name: "b".to_string(),
-            expr: SqlExpr {
-                sql: "c * 2".to_string(),
-                span: Span::default(),
+            expr: Expr::BinaryOp {
+                left: Box::new(Expr::Column {
+                    entity: None,
+                    column: "c".to_string(),
+                }),
+                op: BinaryOp::Mul,
+                right: Box::new(Expr::Literal(Literal::Int(2))),
             },
             filter: None,
             null_handling: None,
@@ -225,9 +251,9 @@ fn test_no_circular_dependency_linear_chain() {
         "c".to_string(),
         Measure {
             name: "c".to_string(),
-            expr: SqlExpr {
-                sql: "sum(@revenue)".to_string(), // Base measure
-                span: Span::default(),
+            expr: Expr::Function {
+                func: Func::Aggregate(mantis::model::expr::AggregateFunc::Sum),
+                args: vec![Expr::AtomRef("revenue".to_string())], // Base measure with @atom
             },
             filter: None,
             null_handling: None,
@@ -239,6 +265,15 @@ fn test_no_circular_dependency_linear_chain() {
         measures,
     };
 
+    // Create the table that the measure block references
+    let table = Table {
+        name: "fact_sales".to_string(),
+        source: "dbo.fact_sales".to_string(),
+        atoms: HashMap::new(),
+        times: HashMap::new(),
+        slicers: HashMap::new(),
+    };
+
     let mut model = model::Model {
         defaults: None,
         calendars: HashMap::new(),
@@ -248,6 +283,7 @@ fn test_no_circular_dependency_linear_chain() {
         reports: HashMap::new(),
     };
 
+    model.tables.insert("fact_sales".to_string(), table);
     model
         .measures
         .insert("fact_sales".to_string(), measure_block);
@@ -258,7 +294,7 @@ fn test_no_circular_dependency_linear_chain() {
 
 #[test]
 fn test_detect_invalid_dimension_drill_path() {
-    use mantis_core::model::{Attribute, DataType, Dimension, DimensionDrillPath};
+    use mantis::model::{Attribute, DataType, Dimension, DimensionDrillPath};
 
     let mut attributes = HashMap::new();
     attributes.insert(
@@ -319,7 +355,7 @@ fn test_detect_invalid_dimension_drill_path() {
 
 #[test]
 fn test_valid_dimension_drill_path() {
-    use mantis_core::model::{Attribute, DataType, Dimension, DimensionDrillPath};
+    use mantis::model::{Attribute, DataType, Dimension, DimensionDrillPath};
 
     let mut attributes = HashMap::new();
     attributes.insert(
@@ -382,7 +418,7 @@ fn test_valid_dimension_drill_path() {
 
 #[test]
 fn test_detect_undefined_via_slicer_reference() {
-    use mantis_core::model::{Slicer, Table};
+    use mantis::model::{Slicer, Table};
 
     let mut slicers = HashMap::new();
 
@@ -430,7 +466,7 @@ fn test_detect_undefined_via_slicer_reference() {
 
 #[test]
 fn test_valid_via_slicer_reference() {
-    use mantis_core::model::{DataType, Slicer, Table};
+    use mantis::model::{Slicer, Table};
 
     let mut slicers = HashMap::new();
 
@@ -500,7 +536,7 @@ fn test_valid_via_slicer_reference() {
 
 #[test]
 fn test_detect_duplicate_calendar_names() {
-    use mantis_core::model::{Calendar, CalendarBody};
+    use mantis::model::{Calendar, CalendarBody};
 
     let mut model = model::Model {
         defaults: None,
@@ -519,7 +555,7 @@ fn test_detect_duplicate_calendar_names() {
         Calendar {
             name: "dates".to_string(),
             body: CalendarBody::Generated {
-                grain: mantis_core::model::GrainLevel::Day,
+                grain: mantis::model::GrainLevel::Day,
                 from: "2020-01-01".to_string(),
                 to: "2025-12-31".to_string(),
             },
@@ -533,7 +569,7 @@ fn test_detect_duplicate_calendar_names() {
 
 #[test]
 fn test_detect_duplicate_dimension_names() {
-    use mantis_core::model::Dimension;
+    use mantis::model::Dimension;
 
     let mut model = model::Model {
         defaults: None,
@@ -561,7 +597,7 @@ fn test_detect_duplicate_dimension_names() {
 
 #[test]
 fn test_detect_duplicate_table_names() {
-    use mantis_core::model::Table;
+    use mantis::model::Table;
 
     let mut model = model::Model {
         defaults: None,

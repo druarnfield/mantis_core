@@ -1,0 +1,396 @@
+// Financial Services Analytics Model
+// Demonstrates calculated slicers, complex filters, rolling measures, and period comparisons
+
+defaults {
+    calendar banking_calendar;
+    fiscal_year_start October;
+    week_start Monday;
+    null_handling coalesce_zero;
+    decimal_places 2;
+}
+
+calendar banking_calendar {
+    generate day+;
+    range infer min 2020-01-01 max 2030-12-31;
+    include fiscal[October];
+
+    drill_path standard { year -> quarter -> month -> week -> day };
+    drill_path fiscal_periods { fiscal_year -> fiscal_quarter -> fiscal_month };
+}
+
+// Note: All table times references updated to use banking_calendar
+
+// Account dimension
+dimension accounts {
+    source "banking.dim_accounts";
+    key account_id;
+
+    attributes {
+        account_number string;
+        account_type string;
+        product_name string;
+        product_category string;
+        open_date date;
+        status string;
+        branch_id int;
+        relationship_manager string;
+    }
+
+    drill_path product_hierarchy { product_category -> product_name -> account_type };
+}
+
+// Customer dimension
+dimension customers {
+    source "banking.dim_customers";
+    key customer_id;
+
+    attributes {
+        customer_name string;
+        customer_type string;
+        segment string;
+        risk_rating string;
+        credit_score int;
+        relationship_start date;
+        primary_branch_id int;
+        state string;
+        city string;
+    }
+
+    drill_path customer_segments { customer_type -> segment -> risk_rating };
+    drill_path geography { state -> city };
+}
+
+// Branch dimension
+dimension branches {
+    source "banking.dim_branches";
+    key branch_id;
+
+    attributes {
+        branch_name string;
+        branch_type string;
+        region string;
+        district string;
+        state string;
+        city string;
+        manager_name string;
+    }
+
+    drill_path org_hierarchy { region -> district -> branch_name };
+}
+
+// Daily balances fact
+table daily_balances {
+    source "banking.fact_daily_balances";
+
+    atoms {
+        opening_balance decimal;
+        closing_balance decimal;
+        avg_daily_balance decimal;
+        min_balance decimal;
+        max_balance decimal;
+        interest_accrued decimal;
+    }
+
+    times {
+        balance_date -> banking_calendar.day;
+    }
+
+    slicers {
+        account_id -> accounts.account_id;
+        customer_id -> customers.customer_id;
+
+        account_type via account_id;
+        customer_segment via customer_id;
+
+        // Calculated slicers with expressions
+        balance_tier string = {
+            case
+                when @closing_balance < 1000 then "Low"
+                when @closing_balance < 10000 then "Medium"
+                when @closing_balance < 100000 then "High"
+                else "Premium"
+            end
+        };
+
+        is_overdrawn bool = { @closing_balance < 0 };
+    }
+}
+
+measures daily_balances {
+    // Balance measures
+    total_balances = { sum(@closing_balance) };
+    avg_balance = { avg(@avg_daily_balance) };
+    min_balance = { min(@min_balance) };
+    max_balance = { max(@max_balance) };
+
+    // Interest
+    total_interest = { sum(@interest_accrued) };
+
+    // Counts and averages
+    balance_count = { count(@closing_balance) };
+    avg_balance_per_record = { avg(@closing_balance) };
+}
+
+// Transactions fact
+table transactions {
+    source "banking.fact_transactions";
+
+    atoms {
+        amount decimal;
+        fee_amount decimal;
+        balance_after decimal;
+    }
+
+    times {
+        transaction_date -> banking_calendar.day;
+        posting_date -> banking_calendar.day;
+    }
+
+    slicers {
+        account_id -> accounts.account_id;
+        customer_id -> customers.customer_id;
+        branch_id -> branches.branch_id;
+
+        transaction_id int;
+        transaction_type string;
+        channel string;
+        category string;
+        merchant_category string;
+        is_recurring bool;
+
+        // Calculated: transaction size category
+        size_category string = {
+            case
+                when abs(@amount) < 100 then "Small"
+                when abs(@amount) < 1000 then "Medium"
+                when abs(@amount) < 10000 then "Large"
+                else "Very Large"
+            end
+        };
+    }
+}
+
+measures transactions {
+    // Volume and amounts
+    transaction_count = { count(@amount) };
+    total_amount = { sum(@amount) };
+    net_flow = { sum(@amount) };
+
+    // Fees
+    total_fees = { sum(@fee_amount) };
+    avg_fee = { avg(@fee_amount) };
+
+    // Averages
+    avg_transaction_amount = { avg(@amount) };
+}
+
+// Loan accounts
+table loans {
+    source "banking.fact_loans";
+
+    atoms {
+        principal_balance decimal;
+        interest_balance decimal;
+        total_balance decimal;
+        monthly_payment decimal;
+        interest_rate decimal;
+        days_past_due int;
+    }
+
+    times {
+        origination_date -> banking_calendar.day;
+        maturity_date -> banking_calendar.day;
+        snapshot_date -> banking_calendar.day;
+    }
+
+    slicers {
+        account_id -> accounts.account_id;
+        customer_id -> customers.customer_id;
+
+        loan_id int;
+        loan_type string;
+        loan_purpose string;
+        collateral_type string;
+
+        // Risk classification calculated slicer
+        delinquency_status string = {
+            case
+                when @days_past_due = 0 then "Current"
+                when @days_past_due <= 30 then "1-30 DPD"
+                when @days_past_due <= 60 then "31-60 DPD"
+                when @days_past_due <= 90 then "61-90 DPD"
+                else "90+ DPD"
+            end
+        };
+    }
+}
+
+measures loans {
+    // Portfolio balances
+    total_principal = { sum(@principal_balance) };
+    total_interest_outstanding = { sum(@interest_balance) };
+    total_loan_balance = { sum(@total_balance) };
+
+    // Counts
+    loan_count = { count(@total_balance) };
+
+    // Averages
+    avg_loan_size = { avg(@total_balance) };
+    avg_interest_rate = { avg(@interest_rate) };
+    avg_monthly_payment = { avg(@monthly_payment) };
+
+    // Days past due stats
+    total_days_past_due = { sum(@days_past_due) };
+    avg_days_past_due = { avg(@days_past_due) };
+}
+
+// Executive deposit report with rolling averages
+// Daily balance dashboard
+report deposit_dashboard {
+    from daily_balances;
+    use_date balance_date;
+
+    group {
+        banking_calendar.standard.month;
+    }
+
+    show {
+        total_balances;
+        avg_balance;
+        total_interest;
+        balance_count;
+    }
+
+    sort total_balances.desc;
+    limit 12;
+}
+
+// Transaction trends
+report transaction_trends {
+    from transactions;
+    use_date transaction_date;
+
+    group {
+        banking_calendar.standard.month;
+    }
+
+    show {
+        transaction_count;
+        total_amount;
+        net_flow;
+        total_fees;
+        avg_transaction_amount;
+    }
+
+    limit 12;
+}
+
+// Transaction analysis
+report transaction_analysis {
+    from transactions;
+    use_date transaction_date;
+
+    show {
+        transaction_count;
+        total_amount;
+        total_fees;
+        avg_fee;
+        avg_transaction_amount;
+    }
+
+    sort transaction_count.desc;
+    limit 50;
+}
+
+// Loan portfolio health
+report loan_portfolio {
+    from loans;
+    use_date snapshot_date;
+
+    show {
+        total_loan_balance;
+        loan_count;
+        avg_loan_size;
+        avg_interest_rate;
+        avg_monthly_payment;
+        avg_days_past_due;
+    }
+
+    sort total_loan_balance.desc;
+    limit 50;
+}
+
+// Fiscal quarter performance
+report fiscal_quarterly {
+    from daily_balances;
+    use_date balance_date;
+
+    group {
+        banking_calendar.fiscal_periods.fiscal_quarter;
+    }
+
+    show {
+        total_balances;
+        avg_balance;
+        total_interest;
+    }
+
+    limit 8;
+}
+
+// Customer segment profitability
+report segment_profitability {
+    from transactions;
+    use_date transaction_date;
+
+    group {
+        customers.customer_segments.segment;
+    }
+
+    show {
+        transaction_count;
+        total_fees;
+        net_flow;
+        avg_transaction_amount;
+    }
+
+    sort total_fees.desc;
+    limit 20;
+}
+
+// Regional performance
+report regional_performance {
+    from transactions;
+    use_date transaction_date;
+
+    group {
+        branches.org_hierarchy.region;
+    }
+
+    show {
+        transaction_count;
+        total_amount;
+        total_fees;
+        net_flow;
+    }
+
+    sort transaction_count.desc;
+    limit 30;
+}
+
+// Balance summary
+report balance_summary {
+    from daily_balances;
+    use_date balance_date;
+
+    show {
+        total_balances;
+        avg_balance;
+        min_balance;
+        max_balance;
+        total_interest;
+    }
+
+    sort total_balances.desc;
+    limit 100;
+}

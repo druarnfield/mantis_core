@@ -86,7 +86,7 @@ path = "tests/model/table_test.rs"
 
 [[test]]
 name = "calendar_test"
-path = "tests/model/calendar_test.rs"
+path = "tests/calendar_test.rs"
 
 [[test]]
 name = "measure_test"
@@ -127,14 +127,6 @@ path = "tests/lowering/defaults_lowering_test.rs"
 [[test]]
 name = "validation_test"
 path = "tests/validation/validation_test.rs"
-
-[[test]]
-name = "translation_test"
-path = "tests/translation/translation_test.rs"
-
-[[test]]
-name = "integration_test"
-path = "tests/translation/integration_test.rs"
 
 [[test]]
 name = "physical_plan_test"

@@ -1,0 +1,292 @@
+// Healthcare Analytics Model
+// Demonstrates multi-table joins, physical calendars, and time intelligence
+
+// Physical calendar linked to a date dimension table
+calendar medical "clinical.dim_date" {
+    day = date_key;
+    week = week_start_date;
+    month = month_start_date;
+    quarter = quarter_start_date;
+    year = year_start_date;
+    fiscal_month = fiscal_month_start_date;
+    fiscal_quarter = fiscal_quarter_start_date;
+    fiscal_year = fiscal_year_start_date;
+
+    fiscal_year_start July;
+    week_start Monday;
+
+    drill_path calendar_hierarchy { year -> quarter -> month -> week -> day };
+    drill_path fiscal_hierarchy { fiscal_year -> fiscal_quarter -> fiscal_month };
+}
+
+// Provider dimension
+dimension providers {
+    source "clinical.dim_providers";
+    key provider_id;
+
+    attributes {
+        provider_name string;
+        specialty string;
+        department string;
+        facility string;
+        credentials string;
+        hire_date date;
+        fte decimal;
+    }
+
+    drill_path org_hierarchy { facility -> department -> specialty };
+}
+
+// Patient dimension
+dimension patients {
+    source "clinical.dim_patients";
+    key patient_id;
+
+    attributes {
+        mrn string;
+        age_group string;
+        gender string;
+        insurance_type string;
+        primary_diagnosis string;
+        zip_code string;
+        county string;
+        state string;
+    }
+
+    drill_path demographics { age_group -> gender };
+    drill_path geography { state -> county -> zip_code };
+}
+
+// Procedure dimension
+dimension procedures {
+    source "clinical.dim_procedures";
+    key procedure_code;
+
+    attributes {
+        procedure_name string;
+        category string;
+        subcategory string;
+        cpt_code string;
+        is_surgical bool;
+        avg_duration_minutes int;
+    }
+
+    drill_path procedure_hierarchy { category -> subcategory -> procedure_name };
+}
+
+// Encounters fact table
+table encounters {
+    source "clinical.fact_encounters";
+
+    atoms {
+        length_of_stay int;
+        charges decimal;
+        payments decimal;
+        adjustments decimal;
+        cost decimal;
+    }
+
+    times {
+        admit_date -> medical.day;
+        discharge_date -> medical.day;
+    }
+
+    slicers {
+        patient_id -> patients.patient_id;
+        attending_provider_id -> providers.provider_id;
+
+        patient_age_group via patient_id;
+        provider_specialty via attending_provider_id;
+
+        encounter_id int;
+        encounter_type string;
+        admission_source string;
+        discharge_disposition string;
+        drg_code string;
+    }
+}
+
+measures encounters {
+    // Volume measures (using atoms for counts)
+    total_encounters = { count(@charges) };
+    encounter_with_stay = { count(@length_of_stay) } where { @length_of_stay > 0 };
+
+    // Length of stay
+    total_patient_days = { sum(@length_of_stay) };
+    avg_length_of_stay = { avg(@length_of_stay) };
+
+    // Financial measures
+    gross_charges = { sum(@charges) };
+    net_revenue = { sum(@payments) };
+    total_adjustments = { sum(@adjustments) };
+    total_cost = { sum(@cost) };
+
+    // Calculated financial
+    collection_rate = { sum(@payments) / sum(@charges) * 100 };
+    margin = { sum(@payments - @cost) };
+    margin_pct = { sum(@payments - @cost) / sum(@payments) * 100 };
+    avg_charge_per_encounter = { avg(@charges) };
+    avg_revenue_per_patient_day = { sum(@payments) / sum(@length_of_stay) };
+}
+
+// Procedures performed
+table procedure_events {
+    source "clinical.fact_procedures";
+
+    atoms {
+        duration_minutes int;
+        procedure_charges decimal;
+        supply_cost decimal;
+        labor_cost decimal;
+    }
+
+    times {
+        procedure_date -> medical.day;
+    }
+
+    slicers {
+        patient_id -> patients.patient_id;
+        performing_provider_id -> providers.provider_id;
+        procedure_code -> procedures.procedure_code;
+
+        event_id int;
+        encounter_id int;
+        room_id int;
+        anesthesia_type string;
+    }
+}
+
+measures procedure_events {
+    procedure_count = { count(@duration_minutes) };
+    total_procedure_time = { sum(@duration_minutes) };
+    avg_procedure_time = { avg(@duration_minutes) };
+    procedure_charges = { sum(@procedure_charges) };
+    procedure_supply_cost = { sum(@supply_cost) };
+    procedure_labor_cost = { sum(@labor_cost) };
+    procedure_total_cost = { sum(@supply_cost + @labor_cost) };
+    procedure_margin = { sum(@procedure_charges - @supply_cost - @labor_cost) };
+}
+
+// Executive financial dashboard
+report financial_dashboard {
+    from encounters;
+    use_date admit_date;
+
+    group {
+        medical.calendar_hierarchy.month;
+    }
+
+    show {
+        total_encounters;
+        gross_charges;
+        net_revenue;
+        total_cost;
+        margin;
+        margin_pct;
+        collection_rate;
+    }
+
+    sort net_revenue.desc;
+    limit 24;
+}
+
+// Provider productivity report
+report provider_productivity {
+    from encounters;
+    use_date admit_date;
+
+    group {
+        providers.org_hierarchy.specialty;
+    }
+
+    show {
+        total_encounters;
+        total_patient_days;
+        avg_length_of_stay;
+        net_revenue;
+        avg_charge_per_encounter;
+    }
+
+    sort total_encounters.desc;
+    limit 50;
+}
+
+// Fiscal year performance with time intelligence
+report fiscal_performance {
+    from encounters;
+    use_date admit_date;
+
+    group {
+        medical.fiscal_hierarchy.fiscal_quarter;
+    }
+
+    show {
+        net_revenue;
+        net_revenue.prior_year as "PY Revenue";
+        net_revenue.yoy_growth as "YoY Growth %";
+        total_encounters;
+        margin_pct;
+    }
+
+    period this_fiscal_year;
+    sort net_revenue.desc;
+    limit 8;
+}
+
+// Case mix analysis
+report case_mix_analysis {
+    from encounters;
+    use_date admit_date;
+
+    show {
+        total_encounters;
+        total_patient_days;
+        avg_length_of_stay;
+        avg_charge_per_encounter;
+        margin_pct;
+    }
+
+    sort total_encounters.desc;
+    limit 100;
+}
+
+// Surgical volume report
+report surgical_volume {
+    from procedure_events;
+    use_date procedure_date;
+
+    group {
+        procedures.procedure_hierarchy.category;
+    }
+
+    show {
+        procedure_count;
+        total_procedure_time;
+        avg_procedure_time;
+        procedure_charges;
+        procedure_margin;
+    }
+
+    sort procedure_count.desc;
+    limit 30;
+}
+
+// Patient demographics
+report patient_demographics {
+    from encounters;
+    use_date admit_date;
+
+    group {
+        patients.demographics.age_group;
+    }
+
+    show {
+        total_encounters;
+        avg_length_of_stay;
+        net_revenue;
+        avg_charge_per_encounter;
+    }
+
+    sort total_encounters.desc;
+    limit 20;
+}

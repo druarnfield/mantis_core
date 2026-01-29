@@ -277,17 +277,35 @@ impl<'a> DPOptimizer<'a> {
             cardinality: Some(join_edge.cardinality),
         });
 
-        // Estimate cost: left cost + right cost + join cost
-        let join_cost = estimated_rows as f64;
+        // Estimate cost: Must account for intermediate result materialization
+        // Physical HashJoin cost model baseline:
+        // - CPU: left_cpu + right_cpu + rows_out
+        // - IO: left_io + right_io
+        // - Memory: min(left_rows, right_rows)
+        //
+        // CRITICAL ENHANCEMENT: Large intermediate results must be materialized to disk
+        // and read back for subsequent joins. This IO cost is the key differentiator!
+        // - Small intermediate (100K rows): stays in memory, minimal IO
+        // - Large intermediate (10M rows): spills to disk, significant IO cost
+        //
+        // We model this by adding IO cost proportional to the output size.
+        // This makes large intermediates much more expensive than small ones.
+
+        // CPU cost includes join processing + penalty for large outputs
+        // The CPU multiplier models the "cost" of producing large intermediates
+        // that will be expensive inputs to future joins
+        // MUST match physical estimator multiplier for consistency
+        let cpu_multiplier = 11.5;
+        let join_cpu_cost = estimated_rows as f64 * cpu_multiplier;
+        let hash_table_memory = left.estimated_rows.min(right.estimated_rows) as f64;
+
         let cost = CostEstimate {
             rows_out: estimated_rows,
-            cpu_cost: left.cost.cpu_cost + right.cost.cpu_cost + join_cost,
-            io_cost: left.cost.io_cost + right.cost.io_cost + (join_cost * 0.1),
-            memory_cost: left
-                .cost
-                .memory_cost
-                .max(right.cost.memory_cost)
-                .max(estimated_rows as f64),
+            cpu_cost: left.cost.cpu_cost + right.cost.cpu_cost + join_cpu_cost,
+            // CRITICAL: Add output rows to IO cost to model materialization cost
+            // Large intermediates (10M rows) must be written/read, making them expensive
+            io_cost: left.cost.io_cost + right.cost.io_cost + estimated_rows as f64,
+            memory_cost: hash_table_memory,
         };
 
         SubsetPlan {

@@ -35,6 +35,7 @@
 //! ```
 
 pub mod cache;
+pub mod compile;
 pub mod config;
 pub mod crypto;
 pub mod dsl;

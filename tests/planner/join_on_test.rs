@@ -2,11 +2,50 @@
 
 use mantis::planner::logical::{JoinCondition, JoinNode, JoinType, LogicalPlan, ScanNode};
 use mantis::planner::physical::{PhysicalPlan, PhysicalPlanner};
-use mantis::semantic::graph::{query::ColumnRef, Cardinality, UnifiedGraph};
+use mantis::semantic::graph::{
+    query::ColumnRef, Cardinality, EntityNode, EntityType, JoinsToEdge, RelationshipSource,
+    SizeCategory, UnifiedGraph,
+};
 use mantis::sql::Dialect;
 
 fn create_test_graph() -> UnifiedGraph {
-    UnifiedGraph::new()
+    let mut graph = UnifiedGraph::new();
+
+    // Add sales table
+    let sales = EntityNode {
+        name: "sales".to_string(),
+        entity_type: EntityType::Fact,
+        physical_name: None,
+        schema: None,
+        row_count: Some(10_000),
+        size_category: SizeCategory::Medium,
+        metadata: Default::default(),
+    };
+    let sales_idx = graph.add_test_entity(sales);
+
+    // Add products table
+    let products = EntityNode {
+        name: "products".to_string(),
+        entity_type: EntityType::Dimension,
+        physical_name: None,
+        schema: None,
+        row_count: Some(1_000),
+        size_category: SizeCategory::Small,
+        metadata: Default::default(),
+    };
+    let products_idx = graph.add_test_entity(products);
+
+    // Add join edge
+    let join_edge = JoinsToEdge {
+        from_entity: "sales".to_string(),
+        to_entity: "products".to_string(),
+        join_columns: vec![("product_id".to_string(), "id".to_string())],
+        cardinality: Cardinality::ManyToOne,
+        source: RelationshipSource::ForeignKey,
+    };
+    graph.add_test_join(sales_idx, products_idx, join_edge);
+
+    graph
 }
 
 #[test]
@@ -41,9 +80,9 @@ fn test_join_converts_to_physical_hash_join() {
     assert!(!physical_plans.is_empty(), "Should produce physical plans");
 
     // Should have at least one HashJoin plan
-    let has_hash_join = physical_plans.iter().any(|plan| {
-        matches!(plan, PhysicalPlan::HashJoin { .. })
-    });
+    let has_hash_join = physical_plans
+        .iter()
+        .any(|plan| matches!(plan, PhysicalPlan::HashJoin { .. }));
     assert!(has_hash_join, "Should produce HashJoin physical plan");
 }
 

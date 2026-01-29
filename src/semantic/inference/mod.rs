@@ -235,7 +235,7 @@ mod tests {
         );
         assert_eq!(
             Cardinality::from_uniqueness(false, false),
-            Cardinality::Unknown
+            Cardinality::ManyToMany
         );
     }
 

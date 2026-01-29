@@ -1,7 +1,7 @@
 // tests/model/calendar_test.rs
 #[cfg(test)]
 mod tests {
-    use mantis_core::model::{Calendar, CalendarBody, DrillPath, GrainLevel, PhysicalCalendar};
+    use mantis::model::{Calendar, CalendarBody, DrillPath, GrainLevel, PhysicalCalendar};
     use std::collections::HashMap;
 
     #[test]
@@ -126,7 +126,7 @@ mod tests {
 
     #[test]
     fn test_fiscal_year_and_week_start() {
-        use mantis_core::model::{Month, Weekday};
+        use mantis::model::{Month, Weekday};
 
         let calendar = Calendar {
             name: "fiscal_dates".to_string(),
