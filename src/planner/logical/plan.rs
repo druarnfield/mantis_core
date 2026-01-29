@@ -148,3 +148,14 @@ pub struct MeasureRef {
     pub entity: String,
     pub measure: String,
 }
+
+/// A measure with its expression fully resolved and ready for SQL generation.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExpandedMeasure {
+    /// Measure name (used for AS alias in SELECT)
+    pub name: String,
+    /// Source entity (for context/debugging)
+    pub entity: String,
+    /// Fully resolved expression (all @atoms converted to qualified columns)
+    pub expr: Expr,
+}
