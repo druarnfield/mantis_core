@@ -131,6 +131,18 @@ impl UnifiedGraph {
         self.node_index.insert(qualified_name, idx);
         idx
     }
+
+    /// Add a measure node to the graph (test helper).
+    ///
+    /// Note: Only use this in tests. For production, use `from_model_with_inference`.
+    #[doc(hidden)]
+    pub fn add_test_measure(&mut self, measure: MeasureNode) -> NodeIndex {
+        let qualified_name = format!("{}.{}", measure.entity, measure.name);
+        let idx = self.graph.add_node(GraphNode::Measure(measure));
+        self.measure_index.insert(qualified_name.clone(), idx);
+        self.node_index.insert(qualified_name, idx);
+        idx
+    }
 }
 
 // TODO: Fix these tests - SqlExpr type was removed/renamed during refactoring

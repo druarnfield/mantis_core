@@ -357,7 +357,7 @@ impl UnifiedGraph {
                         entity: entity_name.clone(),
                         aggregation: "CUSTOM".to_string(), // Measures use SQL expressions
                         source_column: None, // Complex measures don't have single source
-                        expression: Some(format!("{:?}", measure.value.expr.value)),
+                        expression: Some(measure.value.expr.value.clone()),
                         metadata: HashMap::new(),
                     };
 

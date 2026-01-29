@@ -7,10 +7,7 @@
 //! - Calendar queries: find time dimensions
 
 use super::{GraphEdge, GraphNode, UnifiedGraph};
-use crate::dsl::Span;
 use crate::model::expr::Expr;
-use crate::model::expr_parser::parse_sql_expr;
-use crate::model::expr_validation::ExprContext;
 use petgraph::graph::NodeIndex;
 use petgraph::visit::EdgeRef;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -685,7 +682,7 @@ impl UnifiedGraph {
     /// Expand a measure to its fully resolved expression.
     ///
     /// 1. Looks up MeasureNode by "entity.measure"
-    /// 2. Parses the expression string
+    /// 2. Gets the stored expression AST
     /// 3. Resolves @atom references to qualified columns
     ///
     /// # Example
@@ -707,23 +704,15 @@ impl UnifiedGraph {
             _ => return Err(QueryError::MeasureNotFound(qualified)),
         };
 
-        // 2. Parse expression
-        let expr_str =
-            measure_node
-                .expression
-                .as_ref()
-                .ok_or_else(|| QueryError::InvalidExpression {
-                    measure: qualified.clone(),
-                    reason: "measure has no expression".to_string(),
-                })?;
-
-        let span: Span = 0..0;
-        let expr = parse_sql_expr(expr_str, span, ExprContext::Measure).map_err(|e| {
-            QueryError::InvalidExpression {
+        // 2. Get stored expression AST
+        let expr = measure_node
+            .expression
+            .as_ref()
+            .ok_or_else(|| QueryError::InvalidExpression {
                 measure: qualified.clone(),
-                reason: e.to_string(),
-            }
-        })?;
+                reason: "measure has no expression".to_string(),
+            })?
+            .clone();
 
         // 3. Resolve atom refs
         resolve_atom_refs(expr, entity)

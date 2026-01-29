@@ -55,10 +55,26 @@ mod tests {
 
     #[test]
     fn test_simple_report_to_logical_plan() {
+        use crate::model::expr::{AggregateFunc, Expr, Func};
         use crate::model::{Report, ShowItem};
+        use crate::semantic::graph::types::MeasureNode;
         use crate::semantic::graph::UnifiedGraph;
+        use std::collections::HashMap;
 
-        let graph = UnifiedGraph::new();
+        let mut graph = UnifiedGraph::new();
+
+        // Add the measure to the graph
+        graph.add_test_measure(MeasureNode {
+            name: "revenue".to_string(),
+            entity: "sales".to_string(),
+            aggregation: "SUM".to_string(),
+            source_column: Some("amount".to_string()),
+            expression: Some(Expr::Function {
+                func: Func::Aggregate(AggregateFunc::Sum),
+                args: vec![Expr::AtomRef("amount".to_string())],
+            }),
+            metadata: HashMap::new(),
+        });
 
         let report = Report {
             name: "test".to_string(),

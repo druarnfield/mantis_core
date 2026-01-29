@@ -3,6 +3,7 @@
 //! This module defines all node types, edge types, and supporting enums
 //! for the unified graph architecture that replaces ModelGraph + ColumnLineageGraph.
 
+use crate::model::expr::Expr;
 use std::collections::HashMap;
 
 // ============================================================================
@@ -177,8 +178,8 @@ pub struct MeasureNode {
     pub aggregation: String,
     /// Source column (if applicable)
     pub source_column: Option<String>,
-    /// SQL expression (for complex measures)
-    pub expression: Option<String>,
+    /// Parsed expression AST (for complex measures)
+    pub expression: Option<Expr>,
     /// Custom metadata
     pub metadata: HashMap<String, String>,
 }
