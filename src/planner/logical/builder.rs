@@ -3,7 +3,7 @@
 use crate::model::{Report, ShowItem};
 use crate::planner::join_builder::JoinBuilder;
 use crate::planner::logical::{
-    AggregateNode, ColumnRef, FilterNode, LogicalPlan, MeasureRef, OrderRef, ProjectNode,
+    AggregateNode, ColumnRef, ExpandedMeasure, FilterNode, LogicalPlan, OrderRef, ProjectNode,
     ProjectionItem, ScanNode, SortNode,
 };
 use crate::planner::{PlanError, PlanResult};
@@ -76,23 +76,26 @@ impl<'a> PlanBuilder<'a> {
     }
 
     fn build_aggregate(&self, input: LogicalPlan, report: &Report) -> PlanResult<LogicalPlan> {
-        // Collect measures from show items
         let mut measures = Vec::new();
 
         for item in &report.show {
             match item {
                 ShowItem::Measure { name, .. } => {
-                    // Assume measure belongs to first table for now
                     if let Some(entity) = report.from.first() {
-                        measures.push(MeasureRef {
+                        // Expand measure using graph helper
+                        let expr = self
+                            .graph
+                            .expand_measure(entity, name)
+                            .map_err(|e| PlanError::LogicalPlanError(e.to_string()))?;
+
+                        measures.push(ExpandedMeasure {
+                            name: name.clone(),
                             entity: entity.clone(),
-                            measure: name.clone(),
+                            expr,
                         });
                     }
                 }
-                _ => {
-                    // Handle other show items later
-                }
+                _ => {}
             }
         }
 
@@ -100,7 +103,6 @@ impl<'a> PlanBuilder<'a> {
             return Ok(input);
         }
 
-        // Extract GROUP BY columns from report.group
         let group_by = self.extract_group_by(report)?;
 
         Ok(LogicalPlan::Aggregate(AggregateNode {
@@ -150,15 +152,20 @@ impl<'a> PlanBuilder<'a> {
             match item {
                 ShowItem::Measure { name, .. } => {
                     if let Some(entity) = report.from.first() {
-                        projections.push(ProjectionItem::Measure(MeasureRef {
+                        // Expand measure using graph helper
+                        let expr = self
+                            .graph
+                            .expand_measure(entity, name)
+                            .map_err(|e| PlanError::LogicalPlanError(e.to_string()))?;
+
+                        projections.push(ProjectionItem::Measure(ExpandedMeasure {
+                            name: name.clone(),
                             entity: entity.clone(),
-                            measure: name.clone(),
+                            expr,
                         }));
                     }
                 }
-                _ => {
-                    // Handle other show items later
-                }
+                _ => {}
             }
         }
 

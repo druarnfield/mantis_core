@@ -70,7 +70,7 @@ pub struct FilterNode {
 pub struct AggregateNode {
     pub input: Box<LogicalPlan>,
     pub group_by: Vec<ColumnRef>,
-    pub measures: Vec<MeasureRef>,
+    pub measures: Vec<ExpandedMeasure>,
 }
 
 /// Time measure (YTD, prior period, etc).
@@ -110,7 +110,7 @@ pub struct ProjectNode {
 #[derive(Debug, Clone, PartialEq)]
 pub enum ProjectionItem {
     Column(ColumnRef),
-    Measure(MeasureRef),
+    Measure(ExpandedMeasure),
     Expr { expr: Expr, alias: Option<String> },
 }
 
